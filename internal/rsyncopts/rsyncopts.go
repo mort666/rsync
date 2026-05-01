@@ -715,23 +715,23 @@ See https://github.com/gokrazy/rsync for updates, bug reports, and answers
 `
 }
 
-func (o *Options) ShellCommand() string       { return o.shell_cmd }
-func (o *Options) UpdateOnly() bool           { return o.update_only != 0 }
-func (o *Options) DryRun() bool               { return o.dry_run != 0 }
-func (o *Options) PreserveLinks() bool        { return o.preserve_links != 0 }
-func (o *Options) PreserveUid() bool          { return o.preserve_uid != 0 }
-func (o *Options) PreserveGid() bool          { return o.preserve_gid != 0 }
-func (o *Options) PreserveDevices() bool      { return o.preserve_devices != 0 }
-func (o *Options) PreserveMTimes() bool       { return o.preserve_mtimes != 0 }
-func (o *Options) PreservePerms() bool        { return o.preserve_perms != 0 }
-func (o *Options) PreserveSpecials() bool     { return o.preserve_specials != 0 }
-func (o *Options) PreserveHardLinks() bool    { return o.preserve_hard_links != 0 }
-func (o *Options) DoFsync() bool              { return o.do_fsync != 0 }
-func (o *Options) Recurse() bool              { return o.recurse != 0 }
-func (o *Options) Verbose() bool              { return o.verbose != 0 }
-func (o *Options) DeleteMode() bool           { return o.delete_mode != 0 }
-func (o *Options) Sender() bool               { return o.am_sender != 0 }
-func (o *Options) SetSender()                 { o.am_sender = 1 }
+func (o *Options) ShellCommand() string    { return o.shell_cmd }
+func (o *Options) UpdateOnly() bool        { return o.update_only != 0 }
+func (o *Options) DryRun() bool            { return o.dry_run != 0 }
+func (o *Options) PreserveLinks() bool     { return o.preserve_links != 0 }
+func (o *Options) PreserveUid() bool       { return o.preserve_uid != 0 }
+func (o *Options) PreserveGid() bool       { return o.preserve_gid != 0 }
+func (o *Options) PreserveDevices() bool   { return o.preserve_devices != 0 }
+func (o *Options) PreserveMTimes() bool    { return o.preserve_mtimes != 0 }
+func (o *Options) PreservePerms() bool     { return o.preserve_perms != 0 }
+func (o *Options) PreserveSpecials() bool  { return o.preserve_specials != 0 }
+func (o *Options) PreserveHardLinks() bool { return o.preserve_hard_links != 0 }
+func (o *Options) DoFsync() bool           { return o.do_fsync != 0 }
+func (o *Options) Recurse() bool           { return o.recurse != 0 }
+func (o *Options) Verbose() bool           { return o.verbose != 0 }
+func (o *Options) DeleteMode() bool        { return o.delete_mode != 0 }
+func (o *Options) Sender() bool            { return o.am_sender != 0 }
+func (o *Options) SetSender()              { o.am_sender = 1 }
 func (o *Options) SetListOnly() {
 	o.list_only = 1
 	if o.recurse == 0 {
@@ -745,8 +745,10 @@ func (o *Options) Daemon() bool               { return o.am_daemon != 0 }
 func (o *Options) ConnectTimeoutSeconds() int { return o.connect_timeout }
 func (o *Options) AlwaysChecksum() bool       { return o.always_checksum != 0 }
 func (o *Options) IgnoreTimes() bool          { return o.ignore_times != 0 }
+func (o *Options) Inplace() bool              { return o.inplace != 0 }
+func (o *Options) KeepPartial() bool          { return o.keep_partial != 0 || o.inplace != 0 }
+func (o *Options) PartialDir() string         { return o.partial_dir }
 func (o *Options) OutputMOTD() bool           { return o.output_motd != 0 }
-func (o *Options) KeepPartial() bool          { return o.keep_partial != 0 }
 func (o *Options) SparseFiles() bool          { return o.sparse_files != 0 }
 func (o *Options) RsyncPort() int             { return o.rsync_port }
 func (o *Options) PasswordFile() string       { return o.password_file }
@@ -916,8 +918,8 @@ func (o *Options) gokrazyTable() []poptOption {
 		{"no-sparse", "", POPT_ARG_VAL, &o.sparse_files, 0},
 		{"no-S", "", POPT_ARG_VAL, &o.sparse_files, 0},
 		//{"preallocate", "", POPT_ARG_NONE, &o.preallocate_files, 0},
-		//{"inplace", "", POPT_ARG_VAL, &o.inplace, 1},
-		//{"no-inplace", "", POPT_ARG_VAL, &o.inplace, 0},
+		{"inplace", "", POPT_ARG_VAL, &o.inplace, 1},
+		{"no-inplace", "", POPT_ARG_VAL, &o.inplace, 0},
 		//{"append", "", POPT_ARG_NONE, nil, OPT_APPEND},
 		//{"append-verify", "", POPT_ARG_VAL, &o.append_mode, 2},
 		//{"no-append", "", POPT_ARG_VAL, &o.append_mode, 0},
@@ -974,12 +976,12 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"compress-level", "", POPT_ARG_INT, &o.do_compression_level, 0},
 		//{"zl", "", POPT_ARG_INT, &o.do_compression_level, 0},
 
-		//{"", "P", POPT_ARG_NONE, nil, 'P'},
+		{"", "P", POPT_ARG_NONE, nil, 'P'},
 		{"progress", "", POPT_ARG_VAL, &o.do_progress, 1},
 		{"no-progress", "", POPT_ARG_VAL, &o.do_progress, 0},
 		{"partial", "", POPT_ARG_VAL, &o.keep_partial, 1},
 		{"no-partial", "", POPT_ARG_VAL, &o.keep_partial, 0},
-		//{"partial-dir", "", POPT_ARG_STRING, &o.partial_dir, 0},
+		{"partial-dir", "", POPT_ARG_STRING, &o.partial_dir, 0},
 		//{"delay-updates", "", POPT_ARG_VAL, &o.delay_updates, 1},
 		//{"no-delay-updates", "", POPT_ARG_VAL, &o.delay_updates, 0},
 		//{"prune-empty-dirs", "m", POPT_ARG_VAL, &o.prune_empty_dirs, 1},
