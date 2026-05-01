@@ -142,15 +142,17 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		local := filepath.Join(rt.Dest, f.Name)
 		rt.Logger.Printf("creating %s", local)
 	}
-	out, err := newPendingFile(rt.DestRoot, f.Name, rt.Opts.DoFsync, rt.Opts.SparseFiles)
+	out, err := newPendingFile(rt.DestRoot, f.Name, outputMode{
+		Inplace:     rt.Opts.Inplace,
+		KeepPartial: rt.Opts.KeepPartial,
+		PartialDir:  rt.Opts.PartialDir,
+		Fsync:       rt.Opts.DoFsync,
+		Sparse:      rt.Opts.SparseFiles,
+	})
 	if err != nil {
 		return err
 	}
-	if rt.Opts.KeepPartial {
-		defer out.KeepAsPartial(rt.partialName(f.Name))
-	} else {
-		defer out.Cleanup()
-	}
+	defer out.Cleanup()
 
 	h := md4.New()
 	binary.Write(h, binary.LittleEndian, rt.Seed)
