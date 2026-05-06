@@ -286,7 +286,7 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 		// Switch to multiplexing protocol, but only for server-side transmissions.
 		// Transmissions received from the client are not multiplexed.
 		mpx := &rsyncwire.MultiplexWriter{Writer: c.Writer}
-		mpx.WriteMsg(rsyncwire.MsgError, fmt.Appendf(nil, "gokr-rsync [sender]: %v\n", err))
+		mpx.WriteMsg(rsyncwire.MsgErrorXfer, fmt.Appendf(nil, "gokr-rsync [sender]: %v\n", err))
 
 		return err
 	}
@@ -417,7 +417,7 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 		// If returning an error, send the error to the client for display, too:
 		defer func() {
 			if err != nil {
-				mpx.WriteMsg(rsyncwire.MsgError, fmt.Appendf(nil, "gokr-rsync [sender]: %v\n", err))
+				mpx.WriteMsg(rsyncwire.MsgErrorXfer, fmt.Appendf(nil, "gokr-rsync [sender]: %v\n", err))
 			}
 		}()
 
@@ -427,7 +427,7 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 	// If returning an error, send the error to the client for display, too:
 	defer func() {
 		if err != nil {
-			mpx.WriteMsg(rsyncwire.MsgError, fmt.Appendf(nil, "gokr-rsync [receiver]: %v\n", err))
+			mpx.WriteMsg(rsyncwire.MsgErrorXfer, fmt.Appendf(nil, "gokr-rsync [receiver]: %v\n", err))
 		}
 	}()
 	return s.handleConnReceiver(module, crd, cwr, paths, opts, false, c, sessionChecksumSeed)
