@@ -31,6 +31,7 @@ type TransferOpts struct {
 	AlwaysChecksum    bool
 	DoFsync           bool
 	SparseFiles       bool
+	WholeFile         bool
 
 	Inplace     bool
 	KeepPartial bool

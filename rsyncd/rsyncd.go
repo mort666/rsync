@@ -477,6 +477,7 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			AlwaysChecksum: opts.AlwaysChecksum(),
 			DoFsync:        opts.DoFsync(),
 			SparseFiles:    opts.SparseFiles(),
+			WholeFile:      opts.WholeFile(),
 
 			Inplace:     opts.Inplace(),
 			KeepPartial: opts.KeepPartial(),
