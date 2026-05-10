@@ -19,6 +19,7 @@ import (
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsyncstats"
+	"github.com/gokrazy/rsync/internal/rsyncwire"
 	"github.com/mmcloughlin/md4"
 )
 
@@ -89,7 +90,7 @@ func socketClient(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Optio
 	if done {
 		return nil, nil
 	}
-	stats, _, err := ClientRun(osenv, opts, conn, paths, false)
+	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, false)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +99,9 @@ func socketClient(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Optio
 
 // StartInbandExchange is the public API for daemon-over-remote-shell
 // and the rsyncclient package. Auth credentials come from env/file only.
-func StartInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, remotePath string) (done bool, _ error) {
+func StartInbandExchange(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, remotePath string) (done bool, _ error) {
+	conn, stop := rsyncwire.WrapCtx(ctx, conn)
+	defer stop()
 	return startInbandExchange(osenv, opts, conn, remotePath, "", "")
 }
 

@@ -126,11 +126,7 @@ type Result struct {
 //
 // Canceling ctx closes conn, which aborts the transfer.
 func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []string) (*Result, error) {
-	stop := context.AfterFunc(ctx, func() {
-		conn.Close()
-	})
-	defer stop()
-	stats, fileList, err := maincmd.ClientRun(c.osenv, c.opts, conn, paths, c.negotiate)
+	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate)
 	if err != nil {
 		return nil, err
 	}
@@ -147,12 +143,7 @@ func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []strin
 //
 // Canceling ctx closes conn, which aborts the transfer.
 func (c *Client) RunDaemon(ctx context.Context, conn io.ReadWriteCloser, remotePath string, paths []string) (*Result, error) {
-	stop := context.AfterFunc(ctx, func() {
-		conn.Close()
-	})
-	defer stop()
-
-	done, err := maincmd.StartInbandExchange(c.osenv, c.opts, conn, remotePath)
+	done, err := maincmd.StartInbandExchange(ctx, c.osenv, c.opts, conn, remotePath)
 	if err != nil {
 		return nil, err
 	}
