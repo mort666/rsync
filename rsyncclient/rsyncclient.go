@@ -36,6 +36,23 @@ func WithStderr(stderr io.WriteCloser) Option {
 	})
 }
 
+// WithStdout makes the [Client] write to the specified stdout instead of
+// [os.Stdout]. Useful when embedding rsync inside a TUI or other program
+// that owns os.Stdout — for example --dry-run prints each filename the
+// receiver would have written.
+func WithStdout(stdout io.Writer) Option {
+	return clientOptionFunc(func(c *Client) {
+		c.osenv.Stdout = nopWriteCloser{stdout}
+	})
+}
+
+// nopWriteCloser lets callers pass a plain io.Writer: rsyncos.Env needs a
+// Closer for SSH session streams, but nothing in rsync closes stdout, and a
+// caller-owned writer is not ours to close anyway.
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
 // WithSender enables sender mode (receiver by default).
 func WithSender() Option {
 	return clientOptionFunc(func(c *Client) {
