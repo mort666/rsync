@@ -161,6 +161,19 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 
 	var buf [rsync.ChunkSize]byte
 	var offset int64
+	if rt.Opts.AppendMode > 0 && sh.ChecksumCount > 0 {
+		// Match rsync/receiver.c:receive_data — seek past the existing prefix
+		// and append the incoming literals after it. MD4 is computed over the
+		// new bytes only (plain --append: receiver trusts existing prefix).
+		prefix := int64(sh.ChecksumCount) * int64(sh.BlockLength)
+		if sh.RemainderLength != 0 {
+			prefix -= int64(sh.BlockLength) - int64(sh.RemainderLength)
+		}
+		if err := out.SeekToAppendOffset(prefix); err != nil {
+			return fmt.Errorf("append: seek to %d: %w", prefix, err)
+		}
+		offset = prefix
+	}
 	for {
 		token, err := rt.Conn.ReadInt32()
 		if err != nil {

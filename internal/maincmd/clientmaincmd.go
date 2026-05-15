@@ -383,6 +383,8 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			KeepPartial: opts.KeepPartial(),
 			PartialDir:  opts.PartialDir(),
 
+			AppendMode: opts.AppendMode(),
+
 			InfoGTE:  opts.InfoGTE,
 			DebugGTE: opts.DebugGTE,
 		},
