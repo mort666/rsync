@@ -231,7 +231,7 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 			return err
 		}
 		defer f.Close()
-		var buf [rsync.ChunkSize]byte
+		var buf [readBufSize]byte
 		if _, err := io.CopyBuffer(h, f, buf[:]); err != nil {
 			return err
 		}
@@ -239,7 +239,7 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 	})
 
 	var offset int64
-	buf := make([]byte, rsync.ChunkSize)
+	buf := make([]byte, readBufSize)
 	for {
 		if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
 			st.Progress.MaybeShow(uint64(offset), false)
@@ -251,16 +251,20 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 			}
 			return err
 		}
-		chunk := buf[:n]
-		// chunk size (“rawtok” variable in openrsync)
-		if err := st.Conn.WriteInt32(int32(len(chunk))); err != nil {
-			return err
+		// chunk size (“rawtok” variable in openrsync); split into wire tokens
+		// no larger than rsync.ChunkSize, which the receiver caps at rsync's CHUNK_SIZE.
+		data := buf[:n]
+		for len(data) > 0 {
+			m := min(len(data), rsync.ChunkSize)
+			if err := st.Conn.WriteInt32(int32(m)); err != nil {
+				return err
+			}
+			if _, err := st.Conn.Writer.Write(data[:m]); err != nil {
+				return err
+			}
+			data = data[m:]
+			offset += int64(m)
 		}
-		n, err = st.Conn.Writer.Write(chunk)
-		if err != nil {
-			return err
-		}
-		offset += int64(n)
 	}
 	if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
 		st.Progress.Show(uint64(offset), true)

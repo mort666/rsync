@@ -191,6 +191,12 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 			}
 		}
 		if token > 0 {
+			// rsync's CHUNK_SIZE is the longest literal token; real rsync
+			// rejects longer ones with this message, and so do we, to stay
+			// protocol conformant and catch a peer that frames literals wrong.
+			if token > rsync.ChunkSize {
+				return fmt.Errorf("invalid uncompressed token length %d", token)
+			}
 			tokenReader := io.LimitReader(rt.Conn.Reader, int64(token))
 			n, err := io.CopyBuffer(wr, tokenReader, buf[:])
 			if err != nil {

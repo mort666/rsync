@@ -49,6 +49,13 @@ func (fl *fileList) Close() {
 	fl.Sources = nil
 }
 
+// readBufSize is how much we read from the local source per syscall while
+// sending; larger than rsync.ChunkSize for I/O efficiency. The data is still
+// split into wire tokens of at most rsync.ChunkSize (rsync's CHUNK_SIZE): a
+// receiver rejects longer literal tokens ("invalid uncompressed token
+// length"), so the token size is a wire-protocol constant.
+const readBufSize = 256 * 1024
+
 var (
 	lookupOnce      sync.Once
 	lookupGroupOnce sync.Once
