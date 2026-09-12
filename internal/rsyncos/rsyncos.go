@@ -15,6 +15,8 @@ type Env struct {
 
 	DontRestrict bool
 
+	// DialContext, when set, replaces the default TCP dialer used to reach an
+	// rsync:// daemon. Lets callers meter or route the connection.
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	logger log.Logger
