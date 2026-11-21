@@ -11,6 +11,42 @@ jobs:
       - uses: actions/checkout@v2
       - uses: dominikh/staticcheck-action@v1
 
+  # Interop tests against pinned rsync releases, one per protocol version
+  # (29 to 33), plus rsync master and openrsync. See testdata/rsync-matrix.
+  interop-matrix:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version: 'stable'
+
+    - name: install build dependencies
+      run: |
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          build-essential bmake libacl1-dev libpopt-dev libssl-dev libxxhash-dev \
+          libzstd-dev liblz4-dev zlib1g-dev
+
+    - uses: actions/cache@v4
+      with:
+        path: ~/.cache/gokrazy-rsync-matrix
+        key: rsync-matrix-${{ runner.os }}-${{ hashFiles('testdata/rsync-matrix/versions.txt', 'testdata/rsync-matrix/build.sh') }}
+
+    - name: build rsync matrix
+      run: ./testdata/rsync-matrix/build.sh
+
+    - name: run tests against each rsync
+      run: ./testdata/rsync-matrix/run-tests.sh
+
+    - name: upload test logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: rsync-matrix-test-logs
+        path: ~/.cache/gokrazy-rsync-matrix/test-logs
+
   tests:
     strategy:
       matrix:
