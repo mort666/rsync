@@ -69,12 +69,18 @@ func TestDaemonTellsClientWhatItCannotDelete(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root deletes everything")
 	}
-	for name, start := range map[string]func(t *testing.T, dir string) string{
-		"stock rsync": func(t *testing.T, dir string) string { return startStockDaemonModule(t, dir, false) },
-		"gorsyncd": func(t *testing.T, dir string) string {
+	for name, tt := range map[string]struct {
+		start func(t *testing.T, dir string) string
+		args  []string
+	}{
+		// From protocol 30 --delete means --delete-during, and stock
+		// rsync then gets past a read-only folder it owns. Protocol 29
+		// keeps the delete failing, which this reference needs.
+		"stock rsync": {func(t *testing.T, dir string) string { return startStockDaemonModule(t, dir, false) }, []string{"--protocol=29"}},
+		"gorsyncd": {func(t *testing.T, dir string) string {
 			ts := rsynctest.New(t, []rsyncd.Module{{Name: "mod", Path: dir, Writable: true}})
 			return net.JoinHostPort("localhost", ts.Port)
-		},
+		}, nil},
 	} {
 		dir := t.TempDir()
 		ro := filepath.Join(dir, "ro")
@@ -88,9 +94,9 @@ func TestDaemonTellsClientWhatItCannotDelete(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { os.Chmod(ro, 0o755) })
-		addr := start(t, dir)
+		addr := tt.start(t, dir)
 
-		client, err := rsyncclient.New([]string{"-r", "--delete"}, rsyncclient.WithSender(), rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(testlogger.New(t)), rsyncclient.DontRestrict())
+		client, err := rsyncclient.New(append([]string{"-r", "--delete"}, tt.args...), rsyncclient.WithSender(), rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(testlogger.New(t)), rsyncclient.DontRestrict())
 		if err != nil {
 			t.Fatal(err)
 		}

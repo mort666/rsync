@@ -190,3 +190,21 @@ func (b *Buffer) WriteVarlong(x int64, minBytes int) {
 	var buf [9]byte
 	b.buf.Write(AppendVarlong(buf[:0], x, minBytes))
 }
+
+// WriteVarint30 is Conn.WriteVarint30 for a buffer, which has no session.
+func (b *Buffer) WriteVarint30(proto int32, x int32) {
+	if proto < 30 {
+		b.WriteInt32(x)
+		return
+	}
+	b.WriteVarint(x)
+}
+
+// WriteVarlong30 is Conn.WriteVarlong30 for a buffer.
+func (b *Buffer) WriteVarlong30(proto int32, x int64, minBytes int) {
+	if proto < 30 {
+		b.WriteInt64(x)
+		return
+	}
+	b.WriteVarlong(x, minBytes)
+}

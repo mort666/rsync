@@ -2,7 +2,6 @@ package receiver
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"io/fs"
@@ -12,7 +11,6 @@ import (
 	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
-	"github.com/mmcloughlin/md4"
 )
 
 // rsync/receiver.c:recv_files
@@ -168,8 +166,7 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 	}
 	defer out.Cleanup()
 
-	h := md4.New()
-	binary.Write(h, binary.LittleEndian, rt.Seed)
+	h := rt.strong().NewTransferHash()
 
 	wr := io.MultiWriter(out, h)
 

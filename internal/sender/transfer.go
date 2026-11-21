@@ -5,6 +5,7 @@ import (
 
 	"github.com/gokrazy/rsync/internal/log"
 	"github.com/gokrazy/rsync/internal/progress"
+	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
@@ -82,6 +83,19 @@ func (st *Transfer) noteIOError(bits int32) {
 	if st.Env != nil {
 		st.Env.IOErrors.Or(bits)
 	}
+}
+
+// strong is the session's strong checksum (MD4 or MD5, seeded).
+func (st *Transfer) strong() rsyncchecksum.Strong {
+	return rsyncchecksum.NewStrong(st.Conn.Session, st.Seed)
+}
+
+// ioErrors is the run's io_error so far.
+func (st *Transfer) ioErrors() int32 {
+	if st.Env == nil {
+		return 0
+	}
+	return st.Env.IOErrors.Load()
 }
 
 //func (rt *Transfer) listOnly() bool { return rt.Dest == "" }

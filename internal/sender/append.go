@@ -1,13 +1,11 @@
 package sender
 
 import (
-	"encoding/binary"
 	"fmt"
 	"io"
 
 	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
-	"github.com/mmcloughlin/md4"
 )
 
 // sendFileAppend handles --append (and --append-verify) by streaming only the
@@ -54,8 +52,7 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 
 	st.begin(fl)
 
-	h := md4.New()
-	binary.Write(h, binary.LittleEndian, st.Seed)
+	h := st.strong().NewTransferHash()
 
 	// The trailing sum covers the whole file, prefix included
 	// (rsync/match.c:match_sums with append_mode 2, which is what every

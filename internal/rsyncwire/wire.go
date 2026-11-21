@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/gokrazy/rsync/internal/rsyncos"
 )
@@ -22,28 +23,55 @@ const (
 	MsgWarning     uint8 = 4
 	MsgErrorSocket uint8 = 5
 	MsgLog         uint8 = 6
+	MsgIOError     uint8 = 22  // the sending side had an I/O error (protocol 30+)
+	MsgNoop        uint8 = 42  // a keep-alive (protocol 30)
 	MsgSuccess     uint8 = 100 // successfully updated indicated flist index
 	MsgDeleted     uint8 = 101 // successfully deleted a file on receiving side (protocol 29+)
+	MsgNoSend      uint8 = 102 // the sender failed to open a file the generator wanted (protocol 30+)
 )
+
+// ioerrValidMask is rsync's IOERR_VALID_MASK: the io_error bits a peer may
+// set (IOERR_GENERAL, IOERR_VANISHED, IOERR_DEL_LIMIT).
+const ioerrValidMask = 1 | 2 | 4
 
 const mplexBase = 7
 
 type MultiplexWriter struct {
 	Writer io.WriteCloser
 	Trace  *Trace // optional
+
+	// mu keeps frames whole: from protocol 30 more than one goroutine
+	// writes to a multiplexed stream (data, and messages such as errors).
+	mu sync.Mutex
 }
 
 func (w *MultiplexWriter) Write(p []byte) (n int, err error) {
 	return w.WriteMsg(MsgData, p)
 }
 
+// maxFramePayload is the most one frame carries: what this package's
+// reader accepts, which is far below the 24-bit length field.
+const maxFramePayload = maxMessageSize
+
 func (w *MultiplexWriter) WriteMsg(tag uint8, p []byte) (n int, err error) {
-	w.Trace.Frame("send", tag, p)
-	header := uint32(mplexBase+tag)<<24 | uint32(len(p))
-	if err := binary.Write(w.Writer, binary.LittleEndian, header); err != nil {
-		return 0, err
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for {
+		chunk := p[n:]
+		if len(chunk) > maxFramePayload {
+			chunk = chunk[:maxFramePayload]
+		}
+		w.Trace.Frame("send", tag, chunk)
+		header := uint32(mplexBase+tag)<<24 | uint32(len(chunk))
+		if err := binary.Write(w.Writer, binary.LittleEndian, header); err != nil {
+			return n, err
+		}
+		m, err := w.Writer.Write(chunk)
+		n += m
+		if err != nil || n == len(p) {
+			return n, err
+		}
 	}
-	return w.Writer.Write(p)
 }
 
 func (w *MultiplexWriter) Close() error { return w.Writer.Close() }
@@ -100,6 +128,24 @@ func (w *MultiplexReader) Read(p []byte) (n int, err error) {
 		return 0, nil
 	case MsgErrorSocket:
 		return 0, fmt.Errorf("rsync socket error: %s", strings.TrimRight(string(payload), "\n"))
+	case MsgIOError:
+		if len(payload) != 4 {
+			return 0, fmt.Errorf("invalid MSG_IO_ERROR length %d", len(payload))
+		}
+		w.Env.IOErrors.Or(int32(binary.LittleEndian.Uint32(payload)) & ioerrValidMask)
+		return 0, nil
+	case MsgNoop:
+		if len(payload) != 0 {
+			return 0, fmt.Errorf("invalid MSG_NOOP length %d", len(payload))
+		}
+		return 0, nil
+	case MsgNoSend:
+		// The sender also reports why, as an error message. Without a redo
+		// pass there is nothing more to do about the file.
+		if len(payload) != 4 {
+			return 0, fmt.Errorf("invalid MSG_NO_SEND length %d", len(payload))
+		}
+		return 0, nil
 	case MsgDeleted:
 		// From protocol 29 a server receiver names each file --delete
 		// removed, for a client that asked for -v.
@@ -169,10 +215,32 @@ type Conn struct {
 	// Session is set once the protocol version is negotiated.
 	Session Session
 
+	// Mux is this side's multiplexed output, when it has one: a server's
+	// from the start, a client's from protocol 30. It carries messages
+	// besides the data (see WriteMsg).
+	Mux *MultiplexWriter
+
 	// File-list index state for each direction (protocol 30+). The reading
 	// and writing goroutines each touch only their own.
 	ndxIn  NdxReader
 	ndxOut NdxWriter
+}
+
+// WriteMsg sends a message other than data, such as MSG_IO_ERROR. It
+// fails where this side's output is not multiplexed: a client below
+// protocol 30.
+func (c *Conn) WriteMsg(tag uint8, p []byte) error {
+	if c.Mux == nil {
+		return fmt.Errorf("cannot send message %d: output not multiplexed", tag)
+	}
+	_, err := c.Mux.WriteMsg(tag, p)
+	return err
+}
+
+// WriteMsgInt sends a message whose payload is one 32-bit integer, as
+// io.c:send_msg_int does.
+func (c *Conn) WriteMsgInt(tag uint8, v int32) error {
+	return c.WriteMsg(tag, binary.LittleEndian.AppendUint32(nil, uint32(v)))
 }
 
 func (c *Conn) Close() error {

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -32,9 +33,32 @@ import (
 // --protocol.
 
 func protocols(t *testing.T, fn func(t *testing.T, proto int)) {
-	for p := rsyncwire.MinProtocolVersion; p <= rsyncwire.MaxProtocolVersion; p++ {
+	top := min(rsyncwire.MaxProtocolVersion, stockMaxProtocol(t))
+	for p := rsyncwire.MinProtocolVersion; p <= top; p++ {
 		t.Run(fmt.Sprintf("protocol%d", p), func(t *testing.T) { fn(t, p) })
 	}
+}
+
+var protocolVersionRe = regexp.MustCompile(`protocol version (\d+)`)
+
+// stockMaxProtocol is the newest protocol the stock rsync on PATH speaks,
+// from its --version line ("rsync  version 2.6.9  protocol version 29").
+func stockMaxProtocol(t *testing.T) int {
+	t.Helper()
+	bin := rsynctest.TridgeOrGTFO(t, "compares with stock rsync")
+	out, err := exec.Command(bin, "--version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := protocolVersionRe.FindSubmatch(out)
+	if m == nil {
+		t.Fatalf("no protocol version in rsync --version:\n%s", out)
+	}
+	n, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // stock runs stock rsync and returns its combined output. Failing is up to

@@ -44,6 +44,9 @@ var tagNames = map[uint8]string{
 	MsgLog:         "LOG",
 	MsgSuccess:     "SUCCESS",
 	MsgDeleted:     "DELETED",
+	MsgIOError:     "IO_ERROR",
+	MsgNoop:        "NOOP",
+	MsgNoSend:      "NO_SEND",
 }
 
 func tagName(tag uint8) string {

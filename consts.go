@@ -18,6 +18,12 @@ const (
 	XMIT_HLINKED            = (1 << 9)  // protocols 28 - now (non-dirs)
 	XMIT_SAME_DEV_pre30     = (1 << 10) // protocols 28 - 29
 	XMIT_RDEV_MINOR_8_pre30 = (1 << 11) // protocols 28 - 29
+	XMIT_NO_CONTENT_DIR     = (1 << 8)  // protocols 30 - now (dirs only)
+	XMIT_USER_NAME_FOLLOWS  = (1 << 10) // protocols 30 - now
+	XMIT_GROUP_NAME_FOLLOWS = (1 << 11) // protocols 30 - now
+	XMIT_HLINK_FIRST        = (1 << 12) // protocols 30 - now (HLINKED files only)
+	XMIT_IO_ERROR_ENDLIST   = (1 << 12) // protocols 31 - now, and 30 with CF_SAFE_FLIST (with XMIT_EXTENDED_FLAGS)
+	XMIT_MOD_NSEC           = (1 << 13) // protocols 31 - now
 
 	// Deprecated: rsync 2.6 names, use XMIT_HLINKED.
 	XMIT_HAS_IDEV_DATA = XMIT_HLINKED

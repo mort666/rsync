@@ -340,6 +340,9 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		osenv.Logf("(Client) Protocol versions: remote=%d, negotiated=%d", remoteProtocol, proto)
 	}
 
+	if err := c.ReadCompatFlags(); err != nil {
+		return nil, nil, fmt.Errorf("reading compat flags: %v", err)
+	}
 	seed, err := c.ReadInt32()
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading seed: %v", err)
@@ -366,6 +369,15 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		BytesRead: crd.BytesRead,
 	}
 	c.Reader = crd
+
+	// From protocol 30 the client multiplexes its output too
+	// (need_messages_from_generator), from right after the seed.
+	if c.Session.Protocol >= 30 {
+		mpx := &rsyncwire.MultiplexWriter{Writer: cwr, Trace: trace}
+		cwr = &rsyncwire.CountingWriter{W: mpx, BytesWritten: cwr.BytesWritten}
+		c.Writer = cwr
+		c.Mux = mpx
+	}
 
 	if opts.Sender() {
 		st := &sender.Transfer{

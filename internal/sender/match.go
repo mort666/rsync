@@ -2,14 +2,12 @@ package sender
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"hash"
 
 	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
-	"github.com/mmcloughlin/md4"
 )
 
 type target struct {
@@ -51,8 +49,7 @@ func (st *Transfer) hashSearch(targets []target, tagTable map[uint16]int, head r
 	st.begin(fl)
 
 	// sum_init()
-	h := md4.New()
-	binary.Write(h, binary.LittleEndian, st.Seed)
+	h := st.strong().NewTransferHash()
 
 	// The following quotes are citations from
 	// https://www.samba.org/~tridge/phd_thesis.pdf, section 3.2.6 The
@@ -149,7 +146,7 @@ Outer:
 					if err != nil {
 						return err
 					}
-					sum2 = rsyncchecksum.Checksum2(st.Seed, buf[:])
+					sum2 = st.strong().Block(buf[:])
 					doneCsum2 = true
 				}
 

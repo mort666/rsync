@@ -36,8 +36,12 @@ type SumHead struct {
 }
 
 func (sh *SumHead) ReadFrom(c *rsyncwire.Conn) error {
-	// TODO(protocol>=30): update maxBlockLen
-	const maxBlockLen = 1 << 29 // see rsync.h:OLD_MAX_BLOCK_SIZE
+	// io.c:read_sum_head: MAX_BLOCK_SIZE from protocol 30,
+	// OLD_MAX_BLOCK_SIZE before.
+	maxBlockLen := int32(1 << 29)
+	if c.Session.Protocol >= 30 {
+		maxBlockLen = 1 << 17
+	}
 
 	var err error
 	sh.ChecksumCount, err = c.ReadInt32()
@@ -72,7 +76,7 @@ func (sh *SumHead) ReadFrom(c *rsyncwire.Conn) error {
 	if err != nil {
 		return err
 	}
-	// TODO(protocol>=27): update max sh.ChecksumLength check
+	// At most the strong checksum's length, 16 for MD4 and MD5.
 	if sh.ChecksumLength < 0 || sh.ChecksumLength > 16 {
 		return fmt.Errorf("invalid checksum length %d", sh.ChecksumLength)
 	}

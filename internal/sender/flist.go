@@ -40,8 +40,12 @@ type file struct {
 type fileList struct {
 	TotalSize int64
 	BuildTime time.Duration
-	Files     []file
-	Sources   []FileSource
+
+	// hlinkFirst maps a hard-linked file's device and inode to the index,
+	// in the list as sent, of the first file with them (protocol 30+).
+	hlinkFirst map[[2]int64]int32
+	Files      []file
+	Sources    []FileSource
 }
 
 // A fileList must not be used after calling Close().
@@ -270,7 +274,9 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		if isDev {
 			rdevMajor, rdevMinor = rdevMajorMinor(info)
 		}
-		if rdevMinor <= 0xff {
+		// From protocol 30 the minor is a varint, and bit 11 means
+		// XMIT_GROUP_NAME_FOLLOWS.
+		if proto < 30 && rdevMinor <= 0xff {
 			xflags |= rsync.XMIT_RDEV_MINOR_8_pre30
 		}
 	}
@@ -299,6 +305,22 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 			xflags |= rsync.XMIT_HLINKED
 		}
 	}
+	// From protocol 30 the first file of a hard-link group goes in full,
+	// marked XMIT_HLINK_FIRST; a later one names the first by its index in
+	// the list as sent and leaves out the rest (flist.c:send_file_entry).
+	firstHlinkNdx := int32(-1)
+	if sendHlink && proto >= 30 {
+		key := [2]int64{hlinkDev, hlinkIno}
+		if s.fileList.hlinkFirst == nil {
+			s.fileList.hlinkFirst = make(map[[2]int64]int32)
+		}
+		if first, ok := s.fileList.hlinkFirst[key]; ok {
+			firstHlinkNdx = first
+		} else {
+			s.fileList.hlinkFirst[key] = int32(len(s.fileList.Files) - 1)
+			xflags |= rsync.XMIT_HLINK_FIRST
+		}
+	}
 
 	// 1.   status byte, from protocol 28 two bytes when any of the upper
 	//      flags are set
@@ -311,11 +333,19 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	}
 
 	// 2.   inherited filename length (optional, byte)
-	// 3.   filename length (integer or byte)
-	s.fec.WriteInt32(int32(len(name)))
+	// 3.   filename length (integer or byte, from protocol 30 a varint)
+	s.fec.WriteVarint30(proto, int32(len(name)))
 
 	// 4.   file (byte array)
 	s.fec.WriteString(name)
+
+	if firstHlinkNdx >= 0 {
+		// A later file of a hard-link group: the receiver takes
+		// everything else from the first.
+		s.fec.WriteVarint(firstHlinkNdx)
+		s.conn.WriteString(s.fec.String())
+		return nil
+	}
 
 	// 5.   file length (long)
 	size := info.Size()
@@ -325,13 +355,17 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		// system type.
 		size = 4096
 	}
-	s.fec.WriteInt64(size)
+	s.fec.WriteVarlong30(proto, size, 3)
 
 	s.fileList.TotalSize += size
 
-	// 6.   file modification time (optional, integer)
-	// TODO: this will overflow in 2038! :(
-	s.fec.WriteInt32(int32(info.ModTime().Unix()))
+	// 6.   file modification time (optional, integer; from protocol 30 a
+	//      varlong, which does not run out in 2038)
+	if proto >= 30 {
+		s.fec.WriteVarlong(info.ModTime().Unix(), 4)
+	} else {
+		s.fec.WriteInt32(int32(info.ModTime().Unix()))
+	}
 
 	// 7.   file mode (optional, mode_t, integer)
 	s.fec.WriteInt32(mode)
@@ -350,8 +384,8 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 				}
 			}
 		}
-		// 8.   if -o, the user id (integer)
-		s.fec.WriteInt32(uid)
+		// 8.   if -o, the user id (integer; from protocol 30 a varint)
+		s.fec.WriteVarint30(proto, uid)
 	}
 
 	if opts.PreserveGid() {
@@ -368,8 +402,8 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 				}
 			}
 		}
-		// 9.   if -g, the group id (integer)
-		s.fec.WriteInt32(gid)
+		// 9.   if -g, the group id (integer; from protocol 30 a varint)
+		s.fec.WriteVarint30(proto, gid)
 	}
 
 	if sendRdev {
@@ -379,11 +413,13 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 			rdev, _ := rdevFromFileInfo(info)
 			s.fec.WriteInt32(rdev)
 		} else {
-			// write_varint30 is a plain integer below protocol 30.
-			s.fec.WriteInt32(int32(rdevMajor))
-			if xflags&rsync.XMIT_RDEV_MINOR_8_pre30 != 0 {
+			s.fec.WriteVarint30(proto, int32(rdevMajor))
+			switch {
+			case proto >= 30:
+				s.fec.WriteVarint(int32(rdevMinor))
+			case xflags&rsync.XMIT_RDEV_MINOR_8_pre30 != 0:
 				s.fec.WriteByte(byte(rdevMinor))
-			} else {
+			default:
 				s.fec.WriteInt32(int32(rdevMinor))
 			}
 		}
@@ -397,11 +433,11 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err // TODO
 		}
-		s.fec.WriteInt32(int32(len(target)))
+		s.fec.WriteVarint30(proto, int32(len(target)))
 		s.fec.WriteString(target)
 	}
 
-	if sendHlink {
+	if sendHlink && proto < 30 {
 		// 13.  if -H, the device (1-incremented, so never 0) and inode
 		s.fec.WriteInt64(hlinkDev + 1)
 		s.fec.WriteInt64(hlinkIno)
@@ -417,7 +453,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			checksum, err = rsyncchecksum.ReaderChecksum(f)
+			checksum, err = s.st.strong().FileChecksum(f)
 			f.Close()
 			if err != nil {
 				return err
@@ -550,31 +586,50 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 
 	fec.Reset()
 
-	const endOfFileList = 0
-	fec.WriteByte(endOfFileList)
+	// End of the list (flist.c:write_end_of_flist). From protocol 30 with
+	// a safe file list, an I/O error ends it instead, carrying the error.
+	proto := st.Conn.Session.Protocol
+	errInTrailer := proto >= 30 && ioErrors != 0 && st.Conn.Session.SafeFlist()
+	if errInTrailer {
+		fec.WriteByte(rsync.XMIT_EXTENDED_FLAGS)
+		fec.WriteByte(rsync.XMIT_IO_ERROR_ENDLIST >> 8)
+		fec.WriteVarint(ioErrors)
+	} else {
+		const endOfFileList = 0
+		fec.WriteByte(endOfFileList)
+	}
 
 	const endOfSet = 0
 	if st.Opts.PreserveUid() {
 		for uid, name := range uidMap {
-			fec.WriteInt32(uid)
+			fec.WriteVarint30(proto, uid)
 			fec.WriteByte(byte(len(name)))
 			fec.WriteString(name)
 		}
-		fec.WriteInt32(endOfSet)
+		fec.WriteVarint30(proto, endOfSet)
 	}
 	if st.Opts.PreserveGid() {
 		for gid, name := range gidMap {
-			fec.WriteInt32(gid)
+			fec.WriteVarint30(proto, gid)
 			fec.WriteByte(byte(len(name)))
 			fec.WriteString(name)
 		}
-		fec.WriteInt32(endOfSet)
+		fec.WriteVarint30(proto, endOfSet)
 	}
 
-	fec.WriteInt32(ioErrors)
+	// The io_error flag: below protocol 30 always, after the id lists.
+	// From 30, a message when the trailer could not carry it.
+	if proto < 30 {
+		fec.WriteInt32(ioErrors)
+	}
 
 	if err := st.Conn.WriteString(fec.String()); err != nil {
 		return nil, err
+	}
+	if proto >= 30 && ioErrors != 0 && !errInTrailer {
+		if err := st.Conn.WriteMsgInt(rsyncwire.MsgIOError, ioErrors); err != nil {
+			return nil, err
+		}
 	}
 
 	return &fileList, nil

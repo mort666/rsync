@@ -1,7 +1,6 @@
 package sender
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +14,6 @@ import (
 	"github.com/gokrazy/rsync/internal/rsynccommon"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
-	"github.com/mmcloughlin/md4"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -29,6 +27,7 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		maxPhase = 2
 	}
 	phase := 0
+	ioErrorsBefore := st.ioErrors()
 	for {
 		// receive data about receiver’s copy of the file list contents (not
 		// ordered)
@@ -138,6 +137,13 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		}
 		if err != nil {
 			if _, ok := err.(*os.PathError); ok {
+				// From protocol 30 the generator hears that this file
+				// will not come (MSG_NO_SEND), so it does not wait for it.
+				if st.Conn.Session.Protocol >= 30 {
+					if err := st.Conn.WriteMsgInt(rsyncwire.MsgNoSend, fileIndex); err != nil {
+						return err
+					}
+				}
 				// OpenFile() failed. Like rsync, leave the file out, count
 				// it in the run's io_error and go on; a server tells the
 				// client, which fails the run (rsync/sender.c send_files).
@@ -157,6 +163,14 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 			} else {
 				return err
 			}
+		}
+	}
+
+	// From protocol 30, I/O errors that came up while sending are reported
+	// before the last NDX_DONE (sender.c:send_files).
+	if io := st.ioErrors(); io != ioErrorsBefore && st.Conn.Session.Protocol >= 30 {
+		if err := st.Conn.WriteMsgInt(rsyncwire.MsgIOError, io); err != nil {
+			return err
 		}
 	}
 
@@ -248,15 +262,14 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 		return err
 	}
 
-	sh := rsynccommon.SumSizesSqroot(fi.Size())
+	sh := rsynccommon.SumSizesSqroot(st.Conn.Session.Protocol, fi.Size())
 	if err := sh.WriteTo(st.Conn); err != nil {
 		return err
 	}
 
 	st.begin(fl)
 
-	h := md4.New()
-	binary.Write(h, binary.LittleEndian, st.Seed)
+	h := st.strong().NewTransferHash()
 
 	// Calculate the md4 hash in a goroutine.
 	//

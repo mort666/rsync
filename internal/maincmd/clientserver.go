@@ -122,7 +122,7 @@ func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.Re
 		return false, 0, err
 	}
 	// send client greeting
-	fmt.Fprintf(conn, "@RSYNCD: %d\n", opts.ProtocolVersion())
+	io.WriteString(conn, rsyncwire.Greeting(opts.ProtocolVersion()))
 
 	// read server greeting
 	line, err := rd.ReadSlice('\n')
@@ -202,10 +202,16 @@ func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.Re
 	if opts.Verbose() {
 		osenv.Logf("sending daemon args: %s", sargv)
 	}
-	for _, argv := range sargv {
-		fmt.Fprintf(conn, "%s\n", argv)
+	// From protocol 30 each argument ends in a NUL rather than a newline
+	// (clientserver.c rl_nulls), so an argument may hold a newline.
+	eol := "\n"
+	if negotiated >= 30 {
+		eol = "\x00"
 	}
-	fmt.Fprintf(conn, "\n")
+	for _, argv := range sargv {
+		fmt.Fprintf(conn, "%s%s", argv, eol)
+	}
+	fmt.Fprint(conn, eol)
 
 	return false, remoteProtocol, nil
 }

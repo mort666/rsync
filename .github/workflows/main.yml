@@ -42,10 +42,11 @@ jobs:
 
     # Every build again at each older protocol gokrazy/rsync speaks, so the
     # older encodings stay covered as MaxProtocolVersion rises.
-    - name: run tests against each rsync at protocols 27 and 28
+    - name: run tests against each rsync at protocols 27, 28 and 29
       run: |
         ./testdata/rsync-matrix/run-tests.sh -p 27
         ./testdata/rsync-matrix/run-tests.sh -p 28
+        ./testdata/rsync-matrix/run-tests.sh -p 29
 
     - name: upload test logs
       if: always()

@@ -151,17 +151,17 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 func (rt *Transfer) report(c *rsyncwire.Conn) (*rsyncstats.TransferStats, error) {
 	// read statistics:
 	// total bytes read (from network connection)
-	read, err := c.ReadInt64()
+	read, err := c.ReadVarlong30(3)
 	if err != nil {
 		return nil, err
 	}
 	// total bytes written (to network connection)
-	written, err := c.ReadInt64()
+	written, err := c.ReadVarlong30(3)
 	if err != nil {
 		return nil, err
 	}
 	// total size of files
-	size, err := c.ReadInt64()
+	size, err := c.ReadVarlong30(3)
 	if err != nil {
 		return nil, err
 	}

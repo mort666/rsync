@@ -128,3 +128,50 @@ func TestReceiveFileListChecksum(t *testing.T) {
 		}
 	}
 }
+
+// From protocol 30 with a safe file list, an I/O error ends the list; no
+// io_error int follows the (empty) id lists.
+func TestReceiveFileList30IOErrorTrailer(t *testing.T) {
+	var b flistBuilder
+	b.WriteByte(rsync.XMIT_TOP_DIR | rsync.XMIT_LONG_NAME)
+	b.WriteVarint(1)
+	b.WriteString("a")
+	b.WriteVarlong(5, 3)          // length
+	b.WriteVarlong(1700000000, 4) // mtime
+	b.WriteInt32(rsync.S_IFREG | 0o644)
+	b.WriteByte(rsync.XMIT_EXTENDED_FLAGS)
+	b.WriteByte(rsync.XMIT_IO_ERROR_ENDLIST >> 8)
+	b.WriteVarint(1)
+
+	opts := &TransferOpts{}
+	opts.InfoGTE = func(rsyncopts.InfoLevel, uint16) bool { return false }
+	opts.DebugGTE = func(rsyncopts.DebugLevel, uint16) bool { return false }
+	rt := &Transfer{
+		Logger: log.New(io.Discard),
+		Opts:   opts,
+		Env:    &rsyncos.Env{},
+		Conn: &rsyncwire.Conn{
+			Reader:  io.NopCloser(bytes.NewReader([]byte(b.String()))),
+			Session: rsyncwire.Session{Protocol: 30, CompatFlags: rsyncwire.CfSafeFlist},
+		},
+	}
+	files, err := rt.ReceiveFileList()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Name != "a" || files[0].Length != 5 {
+		t.Errorf("files = %+v", files)
+	}
+	if rt.IOErrors != 1 || rt.Env.IOErrors.Load() != 1 {
+		t.Errorf("IOErrors = %d (env %d), want 1", rt.IOErrors, rt.Env.IOErrors.Load())
+	}
+
+	// Without CF_SAFE_FLIST the trailer is a protocol error.
+	rt.Conn = &rsyncwire.Conn{
+		Reader:  io.NopCloser(bytes.NewReader([]byte(b.String()))),
+		Session: rsyncwire.Session{Protocol: 30},
+	}
+	if _, err := rt.ReceiveFileList(); err == nil {
+		t.Errorf("trailer without CF_SAFE_FLIST: no error")
+	}
+}

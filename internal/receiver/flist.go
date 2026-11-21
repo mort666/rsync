@@ -83,7 +83,7 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 
 	var l2 int
 	if flags&rsync.XMIT_LONG_NAME != 0 {
-		l, err := rt.Conn.ReadInt32()
+		l, err := rt.Conn.ReadVarint30()
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +115,15 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	// anything more than Go’s filepath.Clean()?
 	f.Name = filepath.Clean(string(b))
 
-	length, err := rt.Conn.ReadInt64()
+	if proto >= 30 && rt.Opts.PreserveHardlinks && flags&rsync.XMIT_HLINKED != 0 {
+		// A protocol 30 sender abbreviates the later files of a
+		// hard-link group to a reference. Neither gokrazy/rsync receiver
+		// takes -H (the client does not pass it on, the daemon refuses
+		// it), so this cannot be asked for.
+		return nil, fmt.Errorf("hard-link data at protocol %d is not supported", proto)
+	}
+
+	length, err := rt.Conn.ReadVarlong30(3)
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +131,12 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 
 	if flags&rsync.XMIT_SAME_TIME != 0 {
 		f.ModTime = last.ModTime
+	} else if proto >= 30 {
+		modTime, err := rt.Conn.ReadVarlong(4)
+		if err != nil {
+			return nil, err
+		}
+		f.ModTime = time.Unix(modTime, 0)
 	} else {
 		modTime, err := rt.Conn.ReadInt32()
 		if err != nil {
@@ -145,11 +159,19 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 		if flags&rsync.XMIT_SAME_UID != 0 {
 			f.Uid = last.Uid
 		} else {
-			uid, err := rt.Conn.ReadInt32()
+			uid, err := rt.Conn.ReadVarint30()
 			if err != nil {
 				return nil, err
 			}
 			f.Uid = uid
+			// With incremental recursion a protocol 30 sender puts the
+			// name right after the id, instead of in the list after the
+			// file list.
+			if proto >= 30 && flags&rsync.XMIT_USER_NAME_FOLLOWS != 0 {
+				if err := rt.skipIdName(); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 
@@ -157,11 +179,16 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 		if flags&rsync.XMIT_SAME_GID != 0 {
 			f.Gid = last.Gid
 		} else {
-			gid, err := rt.Conn.ReadInt32()
+			gid, err := rt.Conn.ReadVarint30()
 			if err != nil {
 				return nil, err
 			}
 			f.Gid = gid
+			if proto >= 30 && flags&rsync.XMIT_GROUP_NAME_FOLLOWS != 0 {
+				if err := rt.skipIdName(); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 
@@ -191,7 +218,13 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 				f.rdevMajor = uint32(major)
 			}
 			var minor uint32
-			if flags&rsync.XMIT_RDEV_MINOR_8_pre30 != 0 {
+			if proto >= 30 {
+				m, err := rt.Conn.ReadVarint()
+				if err != nil {
+					return nil, err
+				}
+				minor = uint32(m)
+			} else if flags&rsync.XMIT_RDEV_MINOR_8_pre30 != 0 {
 				b, err := rt.Conn.ReadByte()
 				if err != nil {
 					return nil, err
@@ -209,7 +242,7 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	}
 
 	if rt.Opts.PreserveLinks && isLink {
-		length, err := rt.Conn.ReadInt32()
+		length, err := rt.Conn.ReadVarint30()
 		if err != nil {
 			return nil, err
 		}
@@ -227,7 +260,7 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	// Hard-link identity, protocols 26 to 29: below 28 for every regular
 	// file, from 28 for entries flagged XMIT_HLINKED. It is read to stay in
 	// step with the sender; this receiver does not create hard links yet.
-	if rt.Opts.PreserveHardlinks && (proto < 28 && isReg || proto >= 28 && flags&rsync.XMIT_HLINKED != 0) {
+	if rt.Opts.PreserveHardlinks && proto < 30 && (proto < 28 && isReg || proto >= 28 && flags&rsync.XMIT_HLINKED != 0) {
 		if proto < 28 || flags&rsync.XMIT_SAME_DEV_pre30 == 0 {
 			dev, err := rt.Conn.ReadInt64()
 			if err != nil {
@@ -251,6 +284,18 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	return f, nil
 }
 
+// skipIdName reads past a user or group name sent after its id
+// (flist.c:recv_user_name, recv_group_name). gokrazy/rsync maps ids by the
+// lists after the file list.
+func (rt *Transfer) skipIdName() error {
+	n, err := rt.Conn.ReadByte()
+	if err != nil {
+		return err
+	}
+	_, err = io.CopyN(io.Discard, rt.Conn.Reader, int64(n))
+	return err
+}
+
 // rsync/flist.c:recv_file_list
 func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 	if rt.Opts.Progress {
@@ -259,6 +304,7 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 	}
 	lastFileEntry := new(File)
 	var fileList []*File
+	var endListIOErrors int32
 	for {
 		b, err := rt.Conn.ReadByte()
 		if err != nil {
@@ -274,6 +320,19 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 				return nil, err
 			}
 			flags |= uint16(b) << 8
+		}
+		// From protocol 30 with a safe file list, an I/O error can end the
+		// list, followed by the error (flist.c:recv_file_list).
+		if rt.Conn.Session.Protocol >= 30 && flags == rsync.XMIT_EXTENDED_FLAGS|rsync.XMIT_IO_ERROR_ENDLIST {
+			if !rt.Conn.Session.SafeFlist() {
+				return nil, fmt.Errorf("invalid flist flag: %#x", flags)
+			}
+			v, err := rt.Conn.ReadVarint()
+			if err != nil {
+				return nil, err
+			}
+			endListIOErrors = v
+			break
 		}
 
 		f, err := rt.receiveFileEntry(flags, lastFileEntry)
@@ -315,17 +374,24 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 		rt.Groups = groups
 	}
 
-	// read the i/o error flag
-	ioErrors, err := rt.Conn.ReadInt32()
-	if err != nil {
-		return nil, err
+	// read the i/o error flag: below protocol 30 after the lists. From 30
+	// it came at the end of the list, or comes as MSG_IO_ERROR.
+	ioErrors := endListIOErrors
+	if rt.Conn.Session.Protocol < 30 {
+		v, err := rt.Conn.ReadInt32()
+		if err != nil {
+			return nil, err
+		}
+		ioErrors = v
+	} else if rt.Env != nil {
+		ioErrors |= rt.Env.IOErrors.Load()
 	}
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_FLIST, 2) {
 		rt.Logger.Printf("ioErrors: %v", ioErrors)
 	}
 	rt.IOErrors = ioErrors
 	if rt.Env != nil {
-		rt.Env.IOErrors.Store(ioErrors)
+		rt.Env.IOErrors.Or(ioErrors)
 	}
 
 	return fileList, nil

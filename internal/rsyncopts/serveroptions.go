@@ -1,5 +1,7 @@
 package rsyncopts
 
+import "github.com/gokrazy/rsync/internal/rsyncwire"
+
 func (o *Options) CommandOptions(path string, paths ...string) []string {
 	return append(o.ServerOptions(), append([]string{".", path}, paths...)...)
 }
@@ -97,6 +99,14 @@ func (o *Options) ServerOptions() []string {
 	// Only a receiving server sets times, so only it gets -O.
 	if o.Sender() && o.OmitDirTimes() {
 		argstr += "O"
+	}
+
+	// From protocol 30 the client's capabilities ride on the end of the
+	// short options as -e (options.c:maybe_add_e_option). Like rsync, this
+	// looks at the version the client will announce: --protocol=29 leaves
+	// it out.
+	if o.ProtocolVersion() >= 30 {
+		argstr += rsyncwire.ClientCapabilities
 	}
 
 	// argstr[x] = 0;

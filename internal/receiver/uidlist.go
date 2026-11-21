@@ -16,7 +16,7 @@ type mapping struct {
 func (rt *Transfer) recvIdMapping1(localId func(id int32, name string) int32) (map[int32]mapping, error) {
 	idMapping := make(map[int32]mapping)
 	for {
-		id, err := rt.Conn.ReadInt32()
+		id, err := rt.Conn.ReadVarint30()
 		if err != nil {
 			return nil, err
 		}

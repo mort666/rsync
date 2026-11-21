@@ -226,7 +226,7 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	rd := conn.rd
 	// send server greeting
 
-	fmt.Fprintf(cwr, "@RSYNCD: %d\n", rsyncwire.MaxProtocolVersion)
+	io.WriteString(cwr, rsyncwire.Greeting(rsyncwire.MaxProtocolVersion))
 
 	// read client greeting
 	clientGreeting, err := rd.ReadSlice('\n')
@@ -247,7 +247,8 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	// handleConn negotiates again once the client's --protocol is known.
 	// Checking now refuses a client we cannot talk to before it picks a
 	// module.
-	if _, err := rsyncwire.NegotiateProtocol("Server", rsyncwire.MaxProtocolVersion, remoteProtocol); err != nil {
+	greeted, err := rsyncwire.NegotiateProtocol("Server", rsyncwire.MaxProtocolVersion, remoteProtocol)
+	if err != nil {
 		fmt.Fprintf(cwr, "@ERROR: %v\n", err)
 		return err
 	}
@@ -285,15 +286,23 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 
 	io.WriteString(cwr, terminationCommand)
 
-	// read requested flags
+	// read requested flags: from protocol 30 each ends in a NUL, before it
+	// in a newline (clientserver.c rl_nulls)
+	eol := byte('\n')
+	if greeted >= 30 {
+		eol = 0
+	}
 	var flags []string
 	for {
-		line, err := rd.ReadSlice('\n')
+		line, err := rd.ReadSlice(eol)
 		if err != nil {
 			return err
 		}
 		// Only the line end goes: a path may start or end with a space.
-		flag := strings.TrimRight(string(line), "\r\n")
+		flag := strings.TrimRight(string(line), "\r\n\x00")
+		if eol == 0 {
+			flag = string(line[:len(line)-1])
+		}
 		s.logger.Printf("client sent: %q", flag)
 		if flag == "" {
 			break
@@ -313,10 +322,16 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 
 		// terminate connection with an error about which flag is not supported
 		c := &rsyncwire.Conn{
-			Reader: io.NopCloser(rd),
-			Writer: cwr,
+			Reader:  io.NopCloser(rd),
+			Writer:  cwr,
+			Session: rsyncwire.Session{Protocol: greeted},
 		}
 
+		// The client reads the rest of the protocol setup before the
+		// error: compat flags from protocol 30, then the seed.
+		if err := c.WriteCompatFlags(""); err != nil {
+			return err
+		}
 		const errorSeed = 0xee
 		if err := c.WriteInt32(errorSeed); err != nil {
 			return err
@@ -443,6 +458,9 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 		s.logger.Printf("(Server) Protocol versions: remote=%d, negotiated=%d", remoteProtocol, proto)
 	}
 
+	if err := c.WriteCompatFlags(opts.ShellCommand()); err != nil {
+		return err
+	}
 	if err := c.WriteInt32(sessionChecksumSeed); err != nil {
 		return err
 	}
@@ -457,6 +475,24 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 		BytesWritten: cwr.BytesWritten,
 	}
 	c.Writer = cwr
+	c.Mux = mpx
+
+	// What the client tells this side (logging, I/O error bits) lands here,
+	// shared by the transfer.
+	env := &rsyncos.Env{Stderr: s.stderr}
+
+	// From protocol 30 the client multiplexes its output as well
+	// (main.c:start_server, need_messages_from_generator).
+	if c.Session.Protocol >= 30 {
+		mrd := &rsyncwire.MultiplexReader{Env: env, Reader: rd, Trace: trace}
+		c.Reader = struct {
+			io.Reader
+			io.Closer
+		}{
+			Reader: bufio.NewReaderSize(mrd, 256*1024),
+			Closer: conn.closer,
+		}
+	}
 
 	if opts.Sender() {
 		// If returning an error, send the error to the client for display, too:
@@ -466,7 +502,7 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 			}
 		}()
 
-		return s.handleConnSender(module, crd, cwr, paths, opts, c, sessionChecksumSeed, mpx)
+		return s.handleConnSender(module, crd, cwr, paths, opts, c, sessionChecksumSeed, mpx, env)
 	}
 
 	// If returning an error, send the error to the client for display, too:
@@ -475,11 +511,11 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 			mpx.WriteMsg(rsyncwire.MsgErrorXfer, fmt.Appendf(nil, "gokr-rsync [receiver]: %v\n", err))
 		}
 	}()
-	return s.handleConnReceiver(module, crd, cwr, paths, opts, c, sessionChecksumSeed, mpx)
+	return s.handleConnReceiver(module, crd, cwr, paths, opts, c, sessionChecksumSeed, mpx, env)
 }
 
 // handleConnReceiver is equivalent to rsync/main.c:do_server_recv
-func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter) (err error) {
+func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter, env *rsyncos.Env) (err error) {
 	var destPath string
 	implicitModule := module == nil
 	if implicitModule {
@@ -535,10 +571,8 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			InfoGTE:  opts.InfoGTE,
 			DebugGTE: opts.DebugGTE,
 		},
-		Dest: module.Path,
-		Env: &rsyncos.Env{
-			Stderr: s.stderr,
-		},
+		Dest:     module.Path,
+		Env:      env,
 		Conn:     c,
 		Seed:     sessionChecksumSeed,
 		Progress: progress.NewPrinter(io.Discard, time.Now),
@@ -629,7 +663,7 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 }
 
 // handleConnSender is equivalent to rsync/main.c:do_server_sender
-func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter) (err error) {
+func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter, env *rsyncos.Env) (err error) {
 	if module == nil {
 		module = &Module{
 			Name: "implicit",
@@ -638,13 +672,11 @@ func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader,
 	}
 
 	st := &sender.Transfer{
-		Logger: s.logger,
-		Opts:   opts,
-		Conn:   c,
-		Seed:   sessionChecksumSeed,
-		Env: &rsyncos.Env{
-			Stderr: s.stderr,
-		},
+		Logger:   s.logger,
+		Opts:     opts,
+		Conn:     c,
+		Seed:     sessionChecksumSeed,
+		Env:      env,
 		Progress: progress.NewPrinter(io.Discard, time.Now),
 		TellClient: func(tag uint8, msg string) {
 			mpx.WriteMsg(tag, []byte(msg))

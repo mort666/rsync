@@ -6,6 +6,7 @@ import (
 
 	"github.com/gokrazy/rsync/internal/log"
 	"github.com/gokrazy/rsync/internal/progress"
+	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
@@ -103,3 +104,8 @@ type retouchDir struct {
 }
 
 func (rt *Transfer) listOnly() bool { return rt.Dest == "" }
+
+// strong is the session's strong checksum (MD4 or MD5, seeded).
+func (rt *Transfer) strong() rsyncchecksum.Strong {
+	return rsyncchecksum.NewStrong(rt.Conn.Session, rt.Seed)
+}

@@ -19,15 +19,15 @@ func (st *Transfer) handleStats(crd *rsyncwire.CountingReader, cwr *rsyncwire.Co
 
 	// send statistics:
 	// total bytes read (from network connection)
-	if err := st.Conn.WriteInt64(crd.BytesRead); err != nil {
+	if err := st.Conn.WriteVarlong30(crd.BytesRead, 3); err != nil {
 		return err
 	}
 	// total bytes written (to network connection)
-	if err := st.Conn.WriteInt64(cwr.BytesWritten); err != nil {
+	if err := st.Conn.WriteVarlong30(cwr.BytesWritten, 3); err != nil {
 		return err
 	}
 	// total size of files
-	if err := st.Conn.WriteInt64(fileList.TotalSize); err != nil {
+	if err := st.Conn.WriteVarlong30(fileList.TotalSize, 3); err != nil {
 		return err
 	}
 	// From protocol 29: how long building and sending the file list took,
@@ -87,11 +87,12 @@ func (st *Transfer) Do(crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWri
 		st.Logger.Printf("reading final int32")
 	}
 
-	finish, err := st.Conn.ReadInt32()
+	// The final goodbye: NDX_DONE (main.c:read_final_goodbye).
+	finish, err := st.Conn.ReadNdx()
 	if err != nil {
 		return nil, err
 	}
-	if finish != -1 {
+	if finish != rsyncwire.NdxDone {
 		return nil, fmt.Errorf("protocol error: expected final -1, got %d", finish)
 	}
 

@@ -84,7 +84,7 @@ func daemonGreet(t *testing.T, greeting string) string {
 	}
 	defer conn.Close()
 	rd := bufio.NewReader(conn)
-	if line, err := rd.ReadString('\n'); err != nil || line != fmt.Sprintf("@RSYNCD: %d\n", rsyncwire.MaxProtocolVersion) {
+	if line, err := rd.ReadString('\n'); err != nil || line != rsyncwire.Greeting(rsyncwire.MaxProtocolVersion) {
 		t.Fatalf("server greeting: %q, %v", line, err)
 	}
 	if _, err := io.WriteString(conn, greeting+"mod\n"); err != nil {
