@@ -210,6 +210,10 @@ func (o *GokrazyDaemonOptions) table() []poptOption {
 		{"gokr.monitoring_listen", "", POPT_ARG_STRING, &o.MonitoringListen, 0},
 		{"gokr.anonssh_listen", "", POPT_ARG_STRING, &o.AnonSSHListen, 0},
 		{"gokr.modulemap", "", POPT_ARG_STRING, &o.ModuleMap, 0},
+		// Not in tridge rsync's daemon table. Lets a daemon trace its
+		// connections with --debug=io before it has read a client's
+		// arguments.
+		{"debug", "", POPT_ARG_STRING, nil, OPT_DEBUG},
 	}
 }
 
@@ -528,6 +532,9 @@ In addition, the following gokrazy-specific flags are supported:
                            the rsync daemon protocol via anonymous SSH
   --gokr.modulemap         <modulename>=<path> pairs for quick setup of the server,
                            without a config file
+  --debug=io1|io2|io4      trace every connection: multiplex frames (io1),
+                           with a hex prefix of each payload (io2), and every
+                           raw read and write (io4)
 
 See https://github.com/gokrazy/rsync for updates, bug reports, and answers
 `
@@ -790,6 +797,11 @@ func (o *Options) InfoEQ(flag InfoLevel, lvl uint16) bool {
 
 func (o *Options) DebugGTE(flag DebugLevel, lvl uint16) bool {
 	return o.debug[int(flag)] >= lvl
+}
+
+// DebugLevel returns the level set for flag, e.g. 4 for --debug=io4.
+func (o *Options) DebugLevel(flag DebugLevel) int {
+	return int(o.debug[int(flag)])
 }
 
 func (o *Options) DebugEQ(flag DebugLevel, lvl uint16) bool {
@@ -1423,6 +1435,11 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 
 				case 'v':
 					opts.verbose++
+
+				case OPT_DEBUG:
+					if err := parseOutputWords(osenv, debugWords[:], opts.debug[:], pc.poptGetOptArg(), USER_PRIORITY); err != nil {
+						return err
+					}
 
 				default:
 					return fmt.Errorf("unhandled special case opt: %v", opt)

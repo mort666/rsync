@@ -113,6 +113,8 @@ func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.Re
 	}
 	osenv.Logf("rsync module %q, path %q", module, remotePath)
 
+	// ClientRun traces the rest of the session.
+	conn = clientTrace(osenv, opts).WrapReadWriter(conn)
 	rd := bufio.NewReader(conn)
 
 	// send client greeting

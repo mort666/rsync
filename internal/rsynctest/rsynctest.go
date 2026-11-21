@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -103,7 +104,9 @@ func New(t *testing.T, modules []rsyncd.Module, opts ...Option) *TestServer {
 			{Rsyncd: "localhost:0"},
 		}
 	}
-	srv, err := rsyncd.NewServer(modules, rsyncd.WithStderr(testlogger.New(t)), rsyncd.DontRestrict())
+	// RSYNCTEST_TRACE=N traces the test server as --debug=ioN would.
+	traceLevel, _ := strconv.Atoi(os.Getenv("RSYNCTEST_TRACE"))
+	srv, err := rsyncd.NewServer(modules, rsyncd.WithStderr(testlogger.New(t)), rsyncd.DontRestrict(), rsyncd.WithTrace(traceLevel))
 	if err != nil {
 		t.Fatal(err)
 	}

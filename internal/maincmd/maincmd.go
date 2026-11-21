@@ -71,6 +71,7 @@ func Main(ctx context.Context, osenv *rsyncos.Env, args []string, cfg *rsyncdcon
 		}
 		rsyncdOpts := []rsyncd.Option{
 			rsyncd.WithStderr(osenv.Stderr),
+			rsyncd.WithTrace(opts.DebugLevel(rsyncopts.DEBUG_IO)),
 		}
 		if osenv.DontRestrict {
 			rsyncdOpts = append(rsyncdOpts, rsyncd.DontRestrict())
@@ -87,7 +88,7 @@ func Main(ctx context.Context, osenv *rsyncos.Env, args []string, cfg *rsyncdcon
 	// Example: --server --sender -vvvvlogDtpre.iLsfxCIvu . .
 	if opts.Server() {
 		// start_server()
-		srv, err := rsyncd.NewServer(nil, rsyncd.WithStderr(osenv.Stderr))
+		srv, err := rsyncd.NewServer(nil, rsyncd.WithStderr(osenv.Stderr), rsyncd.WithTrace(opts.DebugLevel(rsyncopts.DEBUG_IO)))
 		if err != nil {
 			return nil, err
 		}
@@ -259,7 +260,7 @@ func Main(ctx context.Context, osenv *rsyncos.Env, args []string, cfg *rsyncdcon
 		}()
 	}
 
-	srv, err := rsyncd.NewServer(cfg.Modules, rsyncd.WithStderr(osenv.Stderr))
+	srv, err := rsyncd.NewServer(cfg.Modules, rsyncd.WithStderr(osenv.Stderr), rsyncd.WithTrace(opts.DebugLevel(rsyncopts.DEBUG_IO)))
 	if err != nil {
 		return nil, err
 	}

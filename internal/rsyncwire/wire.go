@@ -29,6 +29,7 @@ const mplexBase = 7
 
 type MultiplexWriter struct {
 	Writer io.WriteCloser
+	Trace  *Trace // optional
 }
 
 func (w *MultiplexWriter) Write(p []byte) (n int, err error) {
@@ -36,9 +37,8 @@ func (w *MultiplexWriter) Write(p []byte) (n int, err error) {
 }
 
 func (w *MultiplexWriter) WriteMsg(tag uint8, p []byte) (n int, err error) {
+	w.Trace.Frame("send", tag, p)
 	header := uint32(mplexBase+tag)<<24 | uint32(len(p))
-	// log.Printf("len %d (hex %x)", len(p), uint32(len(p)))
-	// log.Printf("header=%v (%x)", header, header)
 	if err := binary.Write(w.Writer, binary.LittleEndian, header); err != nil {
 		return 0, err
 	}
@@ -50,6 +50,7 @@ func (w *MultiplexWriter) Close() error { return w.Writer.Close() }
 type MultiplexReader struct {
 	Env    *rsyncos.Env
 	Reader io.Reader
+	Trace  *Trace // optional
 }
 
 // rsync.h defines IO_BUFFER_SIZE as 32 * 1024, but gokr-rsyncd increases it to
@@ -76,8 +77,7 @@ func (w *MultiplexReader) ReadMsg() (tag uint8, p []byte, err error) {
 	if _, err := io.ReadFull(w.Reader, p); err != nil {
 		return 0, nil, err
 	}
-	// log.Printf("header=%v (%x), tag=%v, length=%v", header, header, tag, length)
-	// log.Printf("payload=%x / %q", p, p)
+	w.Trace.Frame("recv", tag, p)
 	return tag, p, nil
 }
 

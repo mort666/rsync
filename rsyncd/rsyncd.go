@@ -66,6 +66,16 @@ func WithStderr(stderr io.WriteCloser) Option {
 	})
 }
 
+// WithTrace logs the frames and bytes of every connection at the given
+// --debug=io level (see rsyncwire.TraceFrames and friends). A client's own
+// --debug=io raises the level for its connection, but only from the point
+// where the server has read the client's arguments.
+func WithTrace(level int) Option {
+	return serverOptionFunc(func(s *Server) {
+		s.traceLevel = level
+	})
+}
+
 func DontRestrict() Option {
 	return serverOptionFunc(func(s *Server) {
 		s.dontRestrict = true
@@ -115,8 +125,21 @@ type Server struct {
 	stderr       io.WriteCloser
 	logger       log.Logger
 	dontRestrict bool
+	traceLevel   int
 
 	modules []Module
+}
+
+// traceConn returns the trace for conn at level (or the server's own level,
+// if higher), and makes conn log its raw bytes if that level asks for it.
+func (s *Server) traceConn(conn *Conn, level int) *rsyncwire.Trace {
+	trace := rsyncwire.NewTrace(s.logger.Printf, "server", max(level, s.traceLevel))
+	if !conn.traced && trace != nil && trace.Level >= rsyncwire.TraceRaw {
+		conn.crd.R = trace.WrapReader(conn.crd.R)
+		conn.cwr.W = trace.WrapWriter(conn.cwr.W)
+		conn.traced = true
+	}
+	return trace
 }
 
 func (s *Server) getModule(requestedModule string) (Module, error) {
@@ -198,6 +221,7 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	defer stop()
 
 	const terminationCommand = "@RSYNCD: OK\n"
+	trace := s.traceConn(conn, 0)
 	cwr := conn.cwr
 	rd := conn.rd
 	// send server greeting
@@ -286,7 +310,7 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 
 		// Switch to multiplexing protocol, but only for server-side transmissions.
 		// Transmissions received from the client are not multiplexed.
-		mpx := &rsyncwire.MultiplexWriter{Writer: c.Writer}
+		mpx := &rsyncwire.MultiplexWriter{Writer: c.Writer, Trace: trace}
 		mpx.WriteMsg(rsyncwire.MsgErrorXfer, fmt.Appendf(nil, "gokr-rsync [sender]: %v\n", err))
 
 		return err
@@ -322,6 +346,7 @@ type Conn struct {
 	cwr    *rsyncwire.CountingWriter
 	rd     *bufio.Reader
 	closer io.Closer
+	traced bool // crd and cwr log raw bytes
 }
 
 func NewConnection(r io.ReadCloser, w io.WriteCloser, name string) *Conn {
@@ -360,6 +385,7 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 	cwr := conn.cwr
 	opts := pc.Options
 	paths := pc.RemainingArgs[1:]
+	trace := s.traceConn(conn, opts.DebugLevel(rsyncopts.DEBUG_IO))
 
 	// “SHOULD be unique to each connection” as per
 	// https://github.com/JohannesBuchner/Jarsync/blob/master/jarsync/rsync.txt
@@ -398,7 +424,7 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 
 	// Switch to multiplexing protocol, but only for server-side transmissions.
 	// Transmissions received from the client are not multiplexed.
-	mpx := &rsyncwire.MultiplexWriter{Writer: c.Writer}
+	mpx := &rsyncwire.MultiplexWriter{Writer: c.Writer, Trace: trace}
 	// Update cwr to track the multiplexed writer,
 	// but copy the number of bytes written.
 	cwr = &rsyncwire.CountingWriter{

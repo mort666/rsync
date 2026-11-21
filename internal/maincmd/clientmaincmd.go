@@ -295,10 +295,18 @@ type ClientHooks struct {
 	OnSend           func(name string)
 }
 
+// clientTrace returns the --debug=io trace for the client side of a
+// connection, or nil.
+func clientTrace(osenv *rsyncos.Env, opts *rsyncopts.Options) *rsyncwire.Trace {
+	return rsyncwire.NewTrace(osenv.Logf, "client", opts.DebugLevel(rsyncopts.DEBUG_IO))
+}
+
 // rsync/main.c:client_run
 func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, paths []string, negotiate bool, hooks ClientHooks) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
 	conn, stop := rsyncwire.WrapCtx(ctx, conn)
 	defer stop()
+	trace := clientTrace(osenv, opts)
+	conn = trace.Wrap(conn)
 	crd := &rsyncwire.CountingReader{R: conn}
 	cwr := &rsyncwire.CountingWriter{W: conn}
 	c := &rsyncwire.Conn{
@@ -327,6 +335,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	mrd := &rsyncwire.MultiplexReader{
 		Env:    osenv,
 		Reader: conn,
+		Trace:  trace,
 	}
 	// TODO: rearchitect such that our buffer can be smaller than the largest
 	// rsync message size
