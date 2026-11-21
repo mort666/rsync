@@ -124,6 +124,12 @@ func daemonList(t *testing.T, addr, remotePath string) []string {
 // " mod/" splits an argument. gorsyncd took every path literally, so a
 // client that escapes names for stock rsync got "not found".
 func TestDaemonArgsLikeStockRsync(t *testing.T) {
+	if v := rsynctest.RsyncVersion(t); strings.HasPrefix(v, "2.") {
+		// rsync 2.x expands daemon wildcards differently (for example "*"
+		// skips dotfiles and ".*" is an error). This test pins the 3.x
+		// behaviour, which every release from 3.0.9 on agrees with.
+		t.Skipf("stock rsync %s predates the daemon wildcard behaviour this test compares against", v)
+	}
 	dir := makeGlobTree(t)
 	stock := startStockDaemon(t, dir)
 	ts := rsynctest.New(t, []rsyncd.Module{{Name: "mod", Path: dir}})
