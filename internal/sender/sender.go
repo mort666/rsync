@@ -282,7 +282,8 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 			return err
 		}
 		// chunk size (“rawtok” variable in openrsync); split into wire tokens
-		// no larger than rsync.ChunkSize, which the receiver caps at rsync's CHUNK_SIZE.
+		// no larger than rsync.ChunkSize, which the receiver caps at rsync's
+		// CHUNK_SIZE.
 		data := buf[:n]
 		for len(data) > 0 {
 			m := min(len(data), rsync.ChunkSize)

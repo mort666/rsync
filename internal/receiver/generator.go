@@ -364,6 +364,11 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 func (rt *Transfer) recvGeneratorPartial(idx int, f *File) (bool, error) {
 	// See if there is a partial file we can resume from.
 	partialName := rt.partialName(f.Name)
+	if partialName == "" {
+		// Partials are kept at the destination name, where the regular delta
+		// path already resumes from them.
+		return false, nil
+	}
 	partial, err := rt.DestRoot.Open(partialName)
 	if os.IsNotExist(err) {
 		// No partial file, request the full file.

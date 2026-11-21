@@ -425,7 +425,6 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			PreserveHardlinks: opts.PreserveHardLinks(),
 			IgnoreTimes:       opts.IgnoreTimes(),
 			AlwaysChecksum:    opts.AlwaysChecksum(),
-			SparseFiles:       opts.SparseFiles(),
 			WholeFile:         opts.WholeFile(),
 
 			Inplace:     opts.Inplace(),
@@ -434,7 +433,8 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 
 			AppendMode: opts.AppendMode(),
 
-			DoFsync: opts.DoFsync(),
+			DoFsync:     opts.DoFsync(),
+			SparseFiles: opts.SparseFiles(),
 
 			OnFile:           fileCallback(hooks.OnFile),
 			UnverifiedAppend: hooks.UnverifiedAppend,

@@ -77,10 +77,10 @@ func RecvFilterList(c *rsyncwire.Conn) (*filterRuleList, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Upstream rejects wildcard rules here because its matcher cannot
+		// handle them; this fork's matches() does (path.Match), and clients
+		// rely on "- *" and "/name/***" for surgical --delete.
 		l.addRule(fr)
-		if fr.flag&filtruleWild != 0 {
-			return nil, fmt.Errorf("wildcard filter rules not yet implemented")
-		}
 	}
 	return &l, nil
 }

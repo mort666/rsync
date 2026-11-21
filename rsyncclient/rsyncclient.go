@@ -202,7 +202,7 @@ type Result struct {
 // Or maybe you want to connect an rsync client and server to each other via a
 // custom RPC protocol. In that case, you will need to transport the
 // [Client.ServerCommandOptions] to the server and then arrange for two
-// [io.ReadWriter] connections between client and server.
+// [io.ReadWriteCloser] connections between client and server.
 //
 // Canceling ctx closes conn, which aborts the transfer.
 //

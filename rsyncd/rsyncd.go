@@ -470,8 +470,6 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			// TODO: PreserveHardlinks: opts.PreserveHardlinks,
 			IgnoreTimes:    opts.IgnoreTimes(),
 			AlwaysChecksum: opts.AlwaysChecksum(),
-			DoFsync:        opts.DoFsync(),
-			SparseFiles:    opts.SparseFiles(),
 			WholeFile:      opts.WholeFile(),
 
 			Inplace:     opts.Inplace(),
@@ -479,6 +477,9 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			PartialDir:  opts.PartialDir(),
 
 			AppendMode: opts.AppendMode(),
+
+			DoFsync:     opts.DoFsync(),
+			SparseFiles: opts.SparseFiles(),
 
 			InfoGTE:  opts.InfoGTE,
 			DebugGTE: opts.DebugGTE,

@@ -761,9 +761,9 @@ func (o *Options) AppendMode() int {
 	return o.append_mode
 }
 func (o *Options) KeepPartial() bool     { return o.keep_partial != 0 || o.inplace != 0 }
+func (o *Options) SparseFiles() bool     { return o.sparse_files != 0 }
 func (o *Options) PartialDir() string    { return o.partial_dir }
 func (o *Options) OutputMOTD() bool      { return o.output_motd != 0 }
-func (o *Options) SparseFiles() bool     { return o.sparse_files != 0 }
 func (o *Options) RsyncPort() int        { return o.rsync_port }
 func (o *Options) PasswordFile() string  { return o.password_file }
 func (o *Options) XferDirs() int         { return o.xfer_dirs }

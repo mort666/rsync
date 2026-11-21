@@ -53,10 +53,15 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 	return nil
 }
 
+// partialName reports where a previously kept partial file for name lives, or
+// "" when partials are not kept in a separate directory (in which case the
+// partial was renamed to the destination name and openLocalFile finds it).
+// The layout must match pendingFile.Cleanup in output.go.
 func (rt *Transfer) partialName(name string) string {
-	dir, file := filepath.Split(name)
-	const partialDir = ".gokrazy_rsync_partial"
-	return filepath.Join(dir, partialDir, file)
+	if rt.Opts.Inplace || !rt.Opts.KeepPartial || rt.Opts.PartialDir == "" {
+		return ""
+	}
+	return filepath.Join(rt.Opts.PartialDir, filepath.Base(name))
 }
 
 func (rt *Transfer) recvFile1(f *File) error {
@@ -73,10 +78,9 @@ func (rt *Transfer) recvFile1(f *File) error {
 	}
 	perm := rt.destPerm(f, st)
 
-	if rt.Opts.KeepPartial {
-		// Use the partial file, if any, to construct the destination,
-		// regardless of whether the localFile exists.
-		partialName := rt.partialName(f.Name)
+	if partialName := rt.partialName(f.Name); partialName != "" {
+		// Resume from the kept partial file, if any, regardless of
+		// whether the localFile exists.
 		partial, err := rt.DestRoot.Open(partialName)
 		if err != nil && !os.IsNotExist(err) {
 			rt.Logger.Printf("opening partial file failed, continuing: %v", err)
@@ -213,6 +217,11 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 			if err != nil {
 				return err
 			}
+			if n != int64(token) {
+				// LimitReader turns a connection closed mid-token into a
+				// short copy without an error.
+				return io.ErrUnexpectedEOF
+			}
 			offset += n
 			continue
 		}
@@ -230,7 +239,11 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		if err != nil {
 			return err
 		}
-		offset += int64(n)
+		if n != int64(dataLen) {
+			// The basis file shrank since the generator summed it.
+			return fmt.Errorf("reading block %d of %s: %w", token, out.Name(), io.ErrUnexpectedEOF)
+		}
+		offset += n
 	}
 	localSum := h.Sum(nil)
 	remoteSum := make([]byte, len(localSum))

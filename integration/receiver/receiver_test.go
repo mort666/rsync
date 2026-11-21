@@ -275,7 +275,7 @@ func TestReceiverSyncPartial(t *testing.T) {
 		Name: "interop",
 		Path: source,
 	})
-	args := []string{"-aH", "--verbose", "--debug=all4", "--partial"}
+	args := []string{"-aH", "--verbose", "--debug=all4", "--partial", "--partial-dir=.gokrazy_rsync_partial"}
 	firstStats := srv.RunClient(t, args, "./", []string{dest})
 	t.Logf("firstStats: %+v", firstStats)
 	//     receiver_test.go:211: firstStats: &{Read:91 Written:3146087 Size:3149824}
@@ -285,7 +285,7 @@ func TestReceiverSyncPartial(t *testing.T) {
 	}
 
 	// Move the destination large data file out of dest
-	// (and into .gokrazy_rsync_partial/, the default --partial-dir)
+	// (and into the --partial-dir)
 	// and run another --partial sync, meaning the delta transfer
 	// should not need to transfer any data.
 	partialDir := filepath.Join(dest, ".gokrazy_rsync_partial")

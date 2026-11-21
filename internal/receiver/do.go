@@ -103,12 +103,8 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 	}
 
 	var eg errgroup.Group
-	// Wrap both, the generator and the receiver goroutine, in waitFor() calls
-	// to ensure we don’t block on the generator when the receiver returns an
-	// error, or vice versa (instead, return and let the goroutine finish in the
-	// background).
-	// waitFor calls f and waits for it to complete, but only until the specified
-	// context is cancelled.
+	// Close the connection as soon as either goroutine fails, so the other one
+	// stops blocking on a read or write that will never complete.
 	var closeOnce sync.Once
 	closeOnErr := func(err error) error {
 		if err != nil {
