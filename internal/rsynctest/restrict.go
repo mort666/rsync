@@ -33,6 +33,13 @@ func init() {
 				}
 			}
 		}
+		// testdata/rsync-matrix/run-tests.sh -p puts a wrapper script first
+		// on PATH, which runs a build from another directory.
+		for _, dir := range filepath.SplitList(os.Getenv("RSYNCTEST_EXTRA_RODIRS")) {
+			if dir != "" {
+				rules = append(rules, landlock.RODirs(dir))
+			}
+		}
 		return rules
 	}
 }

@@ -3,8 +3,11 @@
 # on PATH. internal/rsynctest finds rsync on PATH, and so do the tests that
 # exec "rsync" directly, so no test needs to know about the matrix.
 #
-# Usage: run-tests.sh [-n name[,name...]] [go test flags and packages]
+# Usage: run-tests.sh [-n name[,name...]] [-p protocol] [go test flags and packages]
 #   default packages: ./...
+#   -p N runs every build with --protocol=N, through a wrapper script first on
+#      PATH, so the whole suite talks protocol N to stock rsync. (Tests that
+#      pass --protocol themselves still get theirs: the later flag wins.)
 #
 # Logs go to $RSYNC_MATRIX_DIR/test-logs/<name>.log and a summary is printed.
 set -eu
@@ -14,10 +17,14 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 
 only=""
-if [ "${1:-}" = "-n" ]; then
-  only=$(echo "$2" | tr ',' ' ')
-  shift 2
-fi
+protocol=""
+while [ $# -gt 0 ]; do
+  case $1 in
+    -n) only=$(echo "$2" | tr ',' ' '); shift 2 ;;
+    -p) protocol=$2; shift 2 ;;
+    *) break ;;
+  esac
+done
 
 # Builds whose failures are reported but do not fail the run. Most of the
 # suite drives "rsync" with tridge rsync's command line, which openrsync does
@@ -43,10 +50,20 @@ while read -r name _ _ _; do
     continue
   fi
   version=$("$bin/rsync" --version 2>&1 | head -1)
-  log="$dir/test-logs/$name.log"
-  echo "== $name: $version"
+  path=$bin
+  label=$name
+  if [ -n "$protocol" ]; then
+    path="$dir/wrap/$name-p$protocol"
+    mkdir -p "$path"
+    printf '#!/bin/sh\nexec "%s/rsync" --protocol=%s "$@"\n' "$bin" "$protocol" >"$path/rsync"
+    chmod +x "$path/rsync"
+    label="$name@$protocol"
+  fi
+  log="$dir/test-logs/$label.log"
+  echo "== $label: $version"
   set +e
-  (cd "$root" && PATH="$bin:$PATH" go test -count=1 -timeout 10m "$@") >"$log" 2>&1
+  # RSYNCTEST_EXTRA_RODIRS lets sandboxed tests run the build behind a wrapper.
+  (cd "$root" && PATH="$path:$PATH" RSYNCTEST_EXTRA_RODIRS="$bin" go test -count=1 -timeout 10m "$@") >"$log" 2>&1
   rc=$?
   set -e
   ok=$(grep -c '^ok ' "$log" || true)
@@ -59,7 +76,7 @@ while read -r name _ _ _; do
     result="FAIL: $bad"
     status=1
   fi
-  summary="$summary$(printf '%-12s %s\n' "$name" "$result")
+  summary="$summary$(printf '%-15s %s\n' "$label" "$result")
 "
 done <"$here/versions.txt"
 

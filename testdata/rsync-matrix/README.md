@@ -42,6 +42,14 @@ This runs `go test ./...` once per build, with that build first on `PATH`, and p
 ./testdata/rsync-matrix/run-tests.sh -n rsync-3.0.9,openrsync ./integration/...
 ```
 
+Each build normally negotiates the lower of its own version and gokrazy/rsync's `MaxProtocolVersion`, so as that rises most of the suite stops running the older encodings. `-p N` puts a wrapper first on `PATH` that runs every build with `--protocol=N`, so the whole suite talks protocol N:
+
+```bash
+./testdata/rsync-matrix/run-tests.sh -p 27
+```
+
+Tests that pass `--protocol` to rsync themselves keep theirs, since the later flag wins. Results are labelled `name@N`. The wrapper runs the build from another directory, which the sandboxed tests are allowed to execute through `RSYNCTEST_EXTRA_RODIRS`.
+
 The `openrsync` result is informational: most of the suite drives `rsync` with tridge rsync's command line, which openrsync does not fully accept ([gokrazy/rsync#33](https://github.com/gokrazy/rsync/issues/33)), so its failures are listed but do not fail the run. Proper openrsync coverage needs tests written for its command line.
 
 The same scripts run in CI as the `interop-matrix` job in `.github/workflows/main.yml`.

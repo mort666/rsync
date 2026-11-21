@@ -226,33 +226,9 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 
 	s.fec.Reset()
 
-	// 1.   status byte (integer)
-	s.fec.WriteByte(flags)
+	proto := s.conn.Session.Protocol
+	xflags := uint16(flags)
 
-	// 2.   inherited filename length (optional, byte)
-	// 3.   filename length (integer or byte)
-	s.fec.WriteInt32(int32(len(name)))
-
-	// 4.   file (byte array)
-	s.fec.WriteString(name)
-
-	// 5.   file length (long)
-	size := info.Size()
-	if info.Mode().IsDir() {
-		// tmpfs returns non-4K sizes for directories. Override with
-		// 4096 to make the tests succeed regardless of the /tmp file
-		// system type.
-		size = 4096
-	}
-	s.fec.WriteInt64(size)
-
-	s.fileList.TotalSize += size
-
-	// 6.   file modification time (optional, integer)
-	// TODO: this will overflow in 2038! :(
-	s.fec.WriteInt32(int32(info.ModTime().Unix()))
-
-	// 7.   file mode (optional, mode_t, integer)
 	mode := int32(info.Mode() & os.ModePerm)
 	isDev := false
 	isSpecial := false
@@ -283,6 +259,78 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		isSpecial = true
 	}
 
+	// From protocol 28 a device number goes as major and minor, the minor
+	// in one byte when it fits.
+	sendRdev := (opts.PreserveDevices() && isDev) || (opts.PreserveSpecials() && isSpecial)
+	var rdevMajor, rdevMinor uint32
+	if sendRdev && proto >= 28 {
+		if isDev {
+			rdevMajor, rdevMinor = rdevMajorMinor(info)
+		}
+		if rdevMinor <= 0xff {
+			xflags |= rsync.XMIT_RDEV_MINOR_8_pre30
+		}
+	}
+
+	// Hard-link identity, as rsync's make_file picks it: below protocol 28
+	// for every regular file, from 28 for anything but a folder with more
+	// than one link. Only a server sends it: its client asked for -H and
+	// expects it. A gokrazy client does not pass -H on, so its server does
+	// not expect it.
+	var sendHlink bool
+	var hlinkDev, hlinkIno int64
+	if opts.PreserveHardLinks() && opts.Server() {
+		dev, ino, nlink, ok := hardLinkID(info)
+		if !ok {
+			// No inode numbers here. Give each file its own, so that a
+			// receiver links nothing together.
+			dev, ino, nlink = 0, int64(len(s.fileList.Files)), 1
+		}
+		if proto < 28 {
+			sendHlink = info.Mode().IsRegular()
+		} else {
+			sendHlink = !info.IsDir() && nlink > 1
+		}
+		hlinkDev, hlinkIno = dev, ino
+		if sendHlink && proto >= 28 {
+			xflags |= rsync.XMIT_HLINKED
+		}
+	}
+
+	// 1.   status byte, from protocol 28 two bytes when any of the upper
+	//      flags are set
+	if proto >= 28 && xflags&0xff00 != 0 {
+		xflags |= rsync.XMIT_EXTENDED_FLAGS
+		s.fec.WriteByte(byte(xflags))
+		s.fec.WriteByte(byte(xflags >> 8))
+	} else {
+		s.fec.WriteByte(byte(xflags))
+	}
+
+	// 2.   inherited filename length (optional, byte)
+	// 3.   filename length (integer or byte)
+	s.fec.WriteInt32(int32(len(name)))
+
+	// 4.   file (byte array)
+	s.fec.WriteString(name)
+
+	// 5.   file length (long)
+	size := info.Size()
+	if info.Mode().IsDir() {
+		// tmpfs returns non-4K sizes for directories. Override with
+		// 4096 to make the tests succeed regardless of the /tmp file
+		// system type.
+		size = 4096
+	}
+	s.fec.WriteInt64(size)
+
+	s.fileList.TotalSize += size
+
+	// 6.   file modification time (optional, integer)
+	// TODO: this will overflow in 2038! :(
+	s.fec.WriteInt32(int32(info.ModTime().Unix()))
+
+	// 7.   file mode (optional, mode_t, integer)
 	s.fec.WriteInt32(mode)
 
 	if opts.PreserveUid() {
@@ -321,11 +369,21 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		s.fec.WriteInt32(gid)
 	}
 
-	if (opts.PreserveDevices() && isDev) ||
-		(opts.PreserveSpecials() && isSpecial) {
-		// 10.  if a special file and -D, the device “rdev” type (integer)
-		rdev, _ := rdevFromFileInfo(info)
-		s.fec.WriteInt32(rdev)
+	if sendRdev {
+		// 10.  if a special file and -D, the device “rdev” type: one
+		//      integer below protocol 28, then major and minor
+		if proto < 28 {
+			rdev, _ := rdevFromFileInfo(info)
+			s.fec.WriteInt32(rdev)
+		} else {
+			// write_varint30 is a plain integer below protocol 30.
+			s.fec.WriteInt32(int32(rdevMajor))
+			if xflags&rsync.XMIT_RDEV_MINOR_8_pre30 != 0 {
+				s.fec.WriteByte(byte(rdevMinor))
+			} else {
+				s.fec.WriteInt32(int32(rdevMinor))
+			}
+		}
 	}
 
 	if opts.PreserveLinks() && info.Mode().Type()&os.ModeSymlink != 0 {
@@ -340,7 +398,15 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		s.fec.WriteString(target)
 	}
 
-	if opts.AlwaysChecksum() {
+	if sendHlink {
+		// 13.  if -H, the device (1-incremented, so never 0) and inode
+		s.fec.WriteInt64(hlinkDev + 1)
+		s.fec.WriteInt64(hlinkIno)
+	}
+
+	// Before protocol 28, every entry carried a checksum, all zeros for
+	// anything but a regular file.
+	if opts.AlwaysChecksum() && (info.Mode().IsRegular() || proto < 28) {
 		var emptyChecksum [rsyncchecksum.Size]byte
 		checksum := emptyChecksum[:]
 		if info.Mode().IsRegular() {

@@ -2,6 +2,7 @@ package rsyncd_test
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/gokrazy/rsync/internal/rsynctest"
+	"github.com/gokrazy/rsync/internal/rsyncwire"
 	"github.com/gokrazy/rsync/internal/testlogger"
 	"github.com/gokrazy/rsync/rsyncclient"
 	"github.com/gokrazy/rsync/rsyncd"
@@ -53,12 +55,14 @@ func TestClientProtocolOption(t *testing.T) {
 	}
 	for name, addr := range servers {
 		t.Run(name, func(t *testing.T) {
-			if err := runProtocolClient(t, addr, "--protocol=27"); err != nil {
-				t.Errorf("--protocol=27: %v", err)
+			for v := int32(rsyncwire.MinProtocolVersion); v <= rsyncwire.MaxProtocolVersion; v++ {
+				if err := runProtocolClient(t, addr, fmt.Sprintf("--protocol=%d", v)); err != nil {
+					t.Errorf("--protocol=%d: %v", v, err)
+				}
 			}
 			for arg, want := range map[string]string{
 				"--protocol=26": "--protocol must be at least 27 on the Client",
-				"--protocol=28": "--protocol must be no more than 27 on the Client",
+				fmt.Sprintf("--protocol=%d", rsyncwire.MaxProtocolVersion+1): fmt.Sprintf("--protocol must be no more than %d on the Client", rsyncwire.MaxProtocolVersion),
 			} {
 				err := runProtocolClient(t, addr, arg)
 				if err == nil || !strings.Contains(err.Error(), want) {
@@ -80,7 +84,7 @@ func daemonGreet(t *testing.T, greeting string) string {
 	}
 	defer conn.Close()
 	rd := bufio.NewReader(conn)
-	if line, err := rd.ReadString('\n'); err != nil || line != "@RSYNCD: 27\n" {
+	if line, err := rd.ReadString('\n'); err != nil || line != fmt.Sprintf("@RSYNCD: %d\n", rsyncwire.MaxProtocolVersion) {
 		t.Fatalf("server greeting: %q, %v", line, err)
 	}
 	if _, err := io.WriteString(conn, greeting+"mod\n"); err != nil {

@@ -232,6 +232,10 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		mode == rsync.S_IFBLK ||
 		mode == rsync.S_IFSOCK ||
 		mode == rsync.S_IFIFO) {
+		if (mode == rsync.S_IFCHR || mode == rsync.S_IFBLK) && rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
+			major, minor := splitRdev(f.Rdev)
+			rt.Logger.Printf("mknod(%s, 0%o, [%d,%d])", f.Name, f.Mode, major, minor)
+		}
 		if err := rt.createDevice(f, st, perm); err != nil {
 			return err
 		}

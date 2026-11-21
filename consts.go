@@ -2,21 +2,29 @@ package rsync
 
 import "github.com/gokrazy/rsync/internal/rsyncwire"
 
-// rsync.h
+// File-list transmit flags (rsync.h). From protocol 28, XMIT_EXTENDED_FLAGS
+// in the first byte means a second byte follows, holding bits 8 to 15.
 const (
-	XMIT_TOP_DIR             = (1 << 0)
-	XMIT_SAME_MODE           = (1 << 1)
-	XMIT_EXTENDED_FLAGS      = (1 << 2)
-	XMIT_SAME_RDEV_pre28     = XMIT_EXTENDED_FLAGS /* Only in protocols < 28 */
-	XMIT_SAME_UID            = (1 << 3)
-	XMIT_SAME_GID            = (1 << 4)
-	XMIT_SAME_NAME           = (1 << 5)
-	XMIT_LONG_NAME           = (1 << 6)
-	XMIT_SAME_TIME           = (1 << 7)
-	XMIT_SAME_RDEV_MAJOR     = (1 << 8)
-	XMIT_HAS_IDEV_DATA       = (1 << 9)
-	XMIT_SAME_DEV            = (1 << 10)
-	XMIT_RDEV_MINOR_IS_SMALL = (1 << 11)
+	XMIT_TOP_DIR            = (1 << 0)
+	XMIT_SAME_MODE          = (1 << 1)
+	XMIT_SAME_RDEV_pre28    = (1 << 2) // protocols 20 - 27
+	XMIT_EXTENDED_FLAGS     = (1 << 2) // protocols 28 - now
+	XMIT_SAME_UID           = (1 << 3)
+	XMIT_SAME_GID           = (1 << 4)
+	XMIT_SAME_NAME          = (1 << 5)
+	XMIT_LONG_NAME          = (1 << 6)
+	XMIT_SAME_TIME          = (1 << 7)
+	XMIT_SAME_RDEV_MAJOR    = (1 << 8)  // protocols 28 - now (devices only)
+	XMIT_HLINKED            = (1 << 9)  // protocols 28 - now (non-dirs)
+	XMIT_SAME_DEV_pre30     = (1 << 10) // protocols 28 - 29
+	XMIT_RDEV_MINOR_8_pre30 = (1 << 11) // protocols 28 - 29
+
+	// Deprecated: rsync 2.6 names, use XMIT_HLINKED.
+	XMIT_HAS_IDEV_DATA = XMIT_HLINKED
+	// Deprecated: rsync 2.6 names, use XMIT_SAME_DEV_pre30.
+	XMIT_SAME_DEV = XMIT_SAME_DEV_pre30
+	// Deprecated: rsync 2.6 names, use XMIT_RDEV_MINOR_8_pre30.
+	XMIT_RDEV_MINOR_IS_SMALL = XMIT_RDEV_MINOR_8_pre30
 )
 
 // as per /usr/include/bits/stat.h:

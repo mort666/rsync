@@ -40,6 +40,11 @@ jobs:
     - name: run tests against each rsync
       run: ./testdata/rsync-matrix/run-tests.sh
 
+    # Every build again, made to speak gokrazy/rsync's oldest protocol, so
+    # the older encodings stay covered as MaxProtocolVersion rises.
+    - name: run tests against each rsync at protocol 27
+      run: ./testdata/rsync-matrix/run-tests.sh -p 27
+
     - name: upload test logs
       if: always()
       uses: actions/upload-artifact@v4

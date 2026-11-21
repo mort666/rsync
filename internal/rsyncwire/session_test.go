@@ -1,6 +1,7 @@
 package rsyncwire_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -17,6 +18,8 @@ func TestNegotiateProtocol(t *testing.T) {
 		// A newer peer comes down to our version.
 		{ours: 27, remote: 31, want: 27},
 		{ours: 27, remote: 40, want: 27},
+		{ours: rsyncwire.MaxProtocolVersion, remote: 40, want: rsyncwire.MaxProtocolVersion},
+		{ours: rsyncwire.MaxProtocolVersion, remote: 27, want: 27},
 		{ours: 27, remote: 26, wantErr: "older than the oldest"},
 		{ours: 27, remote: 41, wantErr: "is your shell clean"},
 		{ours: 27, remote: 0, wantErr: "is your shell clean"},
@@ -24,7 +27,7 @@ func TestNegotiateProtocol(t *testing.T) {
 		// binary version was expected.
 		{ours: 27, remote: 0x59535240, wantErr: "is your shell clean"},
 		{ours: 26, remote: 31, wantErr: "--protocol must be at least 27 on the Client"},
-		{ours: 28, remote: 31, wantErr: "--protocol must be no more than 27 on the Client"},
+		{ours: rsyncwire.MaxProtocolVersion + 1, remote: 40, wantErr: fmt.Sprintf("--protocol must be no more than %d on the Client", rsyncwire.MaxProtocolVersion)},
 	} {
 		got, err := rsyncwire.NegotiateProtocol("Client", tt.ours, tt.remote)
 		if tt.wantErr != "" {

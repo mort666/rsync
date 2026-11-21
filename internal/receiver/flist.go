@@ -38,6 +38,12 @@ type File struct {
 	LinkTarget string
 	Rdev       int32
 	Checksum   [rsyncchecksum.Size]byte
+
+	// State that later entries refer back to, carried from entry to entry
+	// as rsync's recv_file_entry keeps it in statics: the last device's
+	// major number (protocol 28+) and the last hard-linked file's device.
+	rdevMajor uint32
+	hlinkDev  int64
 }
 
 // FileMode converts from the Linux permission bits to Go’s permission bits.
@@ -65,7 +71,8 @@ func (f *File) FileMode() fs.FileMode {
 
 // rsync/flist.c:receive_file_entry
 func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
-	f := &File{}
+	f := &File{rdevMajor: last.rdevMajor, hlinkDev: last.hlinkDev}
+	proto := rt.Conn.Session.Protocol
 
 	var l1 int
 	if flags&rsync.XMIT_SAME_NAME != 0 {
@@ -164,17 +171,42 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	isDev := mode == rsync.S_IFCHR || mode == rsync.S_IFBLK
 	isSpecial := mode == rsync.S_IFIFO || mode == rsync.S_IFSOCK
 	isLink := mode == rsync.S_IFLNK
+	isReg := mode == rsync.S_IFREG
 
-	if rt.Opts.PreserveDevices && (isDev || isSpecial) {
-		// TODO(protocol >= 28): rdev/major/minor handling
-		if flags&rsync.XMIT_SAME_RDEV_pre28 != 0 {
-			f.Rdev = last.Rdev
-		} else {
-			rdev, err := rt.Conn.ReadInt32()
-			if err != nil {
-				return nil, err
+	if (rt.Opts.PreserveDevices && isDev) || (rt.Opts.PreserveSpecials && isSpecial) {
+		if proto < 28 {
+			if flags&rsync.XMIT_SAME_RDEV_pre28 != 0 {
+				f.Rdev = last.Rdev
+			} else {
+				rdev, err := rt.Conn.ReadInt32()
+				if err != nil {
+					return nil, err
+				}
+				f.Rdev = rdev
 			}
-			f.Rdev = rdev
+		} else {
+			if flags&rsync.XMIT_SAME_RDEV_MAJOR == 0 {
+				major, err := rt.Conn.ReadVarint30()
+				if err != nil {
+					return nil, err
+				}
+				f.rdevMajor = uint32(major)
+			}
+			var minor uint32
+			if flags&rsync.XMIT_RDEV_MINOR_8_pre30 != 0 {
+				b, err := rt.Conn.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				minor = uint32(b)
+			} else {
+				m, err := rt.Conn.ReadInt32()
+				if err != nil {
+					return nil, err
+				}
+				minor = uint32(m)
+			}
+			f.Rdev = makeRdev(f.rdevMajor, minor)
 		}
 	}
 
@@ -194,7 +226,25 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 		f.LinkTarget = string(b)
 	}
 
-	if rt.Opts.AlwaysChecksum {
+	// Hard-link identity, protocols 26 to 29: below 28 for every regular
+	// file, from 28 for entries flagged XMIT_HLINKED. It is read to stay in
+	// step with the sender; this receiver does not create hard links yet.
+	if rt.Opts.PreserveHardlinks && (proto < 28 && isReg || proto >= 28 && flags&rsync.XMIT_HLINKED != 0) {
+		if proto < 28 || flags&rsync.XMIT_SAME_DEV_pre30 == 0 {
+			dev, err := rt.Conn.ReadInt64()
+			if err != nil {
+				return nil, err
+			}
+			f.hlinkDev = dev - 1 // sent 1-incremented so it is never 0
+		}
+		if _, err := rt.Conn.ReadInt64(); err != nil { // inode
+			return nil, err
+		}
+	}
+
+	// Before protocol 28, every entry carried a checksum, all zeros for
+	// anything but a regular file.
+	if rt.Opts.AlwaysChecksum && (isReg || proto < 28) {
 		if _, err := io.ReadFull(rt.Conn.Reader, f.Checksum[:]); err != nil {
 			return nil, err
 		}
@@ -220,8 +270,13 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 			break
 		}
 		flags := uint16(b)
-		// rt.Logger.Printf("flags: %x", flags)
-		// TODO(protocol >= 28): extended flags
+		if rt.Conn.Session.Protocol >= 28 && flags&rsync.XMIT_EXTENDED_FLAGS != 0 {
+			b, err := rt.Conn.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			flags |= uint16(b) << 8
+		}
 
 		f, err := rt.receiveFileEntry(flags, lastFileEntry)
 		if err != nil {
