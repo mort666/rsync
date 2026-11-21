@@ -158,6 +158,11 @@ type Conn struct {
 
 	// Session is set once the protocol version is negotiated.
 	Session Session
+
+	// File-list index state for each direction (protocol 30+). The reading
+	// and writing goroutines each touch only their own.
+	ndxIn  NdxReader
+	ndxOut NdxWriter
 }
 
 func (c *Conn) Close() error {
