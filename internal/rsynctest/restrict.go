@@ -2,6 +2,8 @@ package rsynctest
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/gokrazy/rsync/internal/restrict"
 	"github.com/landlock-lsm/go-landlock/landlock"
@@ -9,7 +11,7 @@ import (
 
 func init() {
 	restrict.ExtraHook = func() []landlock.Rule {
-		return []landlock.Rule{
+		rules := []landlock.Rule{
 			// contains /usr/bin/rsync (and library deps)
 			landlock.RODirs("/usr"),
 			landlock.RODirs("/nix").IgnoreIfMissing(),
@@ -20,5 +22,17 @@ func init() {
 			// used in some of our test code
 			landlock.RWFiles("/dev/null"),
 		}
+		// Tests run against whichever rsync comes first on PATH, which is not
+		// always under /usr (testdata/rsync-matrix puts pinned builds first).
+		// Allow its directory too, or the sandboxed test process cannot
+		// execute it.
+		if p, err := exec.LookPath("rsync"); err == nil {
+			if p, err := filepath.EvalSymlinks(p); err == nil {
+				if p, err := filepath.Abs(p); err == nil {
+					rules = append(rules, landlock.RODirs(filepath.Dir(p)))
+				}
+			}
+		}
+		return rules
 	}
 }
