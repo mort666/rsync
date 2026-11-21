@@ -860,6 +860,10 @@ func TestInteropRemoteDaemonSSH(t *testing.T) {
 						Address:        "localhost:0",
 						AuthorizedKeys: authorizedKeysPath,
 					},
+					// Like the Anon subtest: without an explicit path the
+					// host key goes under os.UserConfigDir(), which the
+					// parallel TestInteropRemoteDaemon changes via HOME.
+					HostKeyPath: filepath.Join(t.TempDir(), "gokr-rsyncd", "ssh_host_ed25519_key"),
 				},
 			}))
 
@@ -906,6 +910,10 @@ func TestInteropRemoteDaemonSSH(t *testing.T) {
 						Address:        "localhost:0",
 						AuthorizedKeys: authorizedKeysPath,
 					},
+					// Like the Anon subtest: without an explicit path the
+					// host key goes under os.UserConfigDir(), which the
+					// parallel TestInteropRemoteDaemon changes via HOME.
+					HostKeyPath: filepath.Join(t.TempDir(), "gokr-rsyncd", "ssh_host_ed25519_key"),
 				},
 			}))
 
