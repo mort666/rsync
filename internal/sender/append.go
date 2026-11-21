@@ -45,7 +45,7 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 		return fmt.Errorf("append: receiver prefix %d > sender size %d for %s", prefixSize, fi.Size(), fl.path)
 	}
 
-	if err := st.Conn.WriteInt32(fileIndex); err != nil {
+	if err := st.Conn.WriteNdxAndAttrs(fileIndex, st.attrs); err != nil {
 		return err
 	}
 	if err := head.WriteTo(st.Conn); err != nil {

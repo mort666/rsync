@@ -1,11 +1,13 @@
 package rsyncclient_test
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -92,7 +94,10 @@ func TestResultIOErrorsFromGorsyncSender(t *testing.T) {
 	}
 }
 
-// Stock rsync sets the flag too, and also sends an error message.
+// Stock rsync sets the flag too, and also reports an error message: through
+// the protocol stream up to protocol 28, and from 29 on its own stderr,
+// which an ssh connection carries to the user (rsync's compat.c sets
+// msgs2stderr to 0 for a server only below 29).
 func TestResultIOErrorsFromStockRsync(t *testing.T) {
 	src := unreadableTree(t)
 	if _, err := exec.LookPath("rsync"); err != nil {
@@ -103,6 +108,8 @@ func TestResultIOErrorsFromStockRsync(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("rsync", client.ServerCommandOptions(src+"/")...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -120,8 +127,11 @@ func TestResultIOErrorsFromStockRsync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.IOErrors&1 == 0 || res.XferErrors == 0 {
-		t.Errorf("IOErrors = %d, XferErrors = %d; want both set", res.IOErrors, res.XferErrors)
+	if res.IOErrors&1 == 0 {
+		t.Errorf("IOErrors = %d, want bit 1 set", res.IOErrors)
+	}
+	if res.XferErrors == 0 && !strings.Contains(stderr.String(), "Permission denied") {
+		t.Errorf("XferErrors = 0 and rsync's stderr has no error message:\n%s", stderr.String())
 	}
 }
 

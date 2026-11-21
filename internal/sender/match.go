@@ -40,7 +40,7 @@ func (st *Transfer) hashSearch(targets []target, tagTable map[uint16]int, head r
 	readSize := max(3*head.BlockLength, 256*1024)
 	ms := mapFile(f, fi.Size(), readSize, head.BlockLength)
 
-	if err := st.Conn.WriteInt32(fileIndex); err != nil {
+	if err := st.Conn.WriteNdxAndAttrs(fileIndex, st.attrs); err != nil {
 		return err
 	}
 
@@ -117,8 +117,12 @@ Outer:
 				// points to an offset the receiver has already written past
 				// would read overwritten content. Constrain matches to be
 				// forward references only; if no forward match is found the
-				// data falls through to be sent as literal.
-				if st.Opts.Inplace() && int64(i)*int64(head.BlockLength) < offset {
+				// data falls through to be sent as literal. This only
+				// holds when the basis is the destination itself
+				// (rsync's updating_basis_file): from protocol 29 the
+				// generator says when it is another file, such as the
+				// one in --partial-dir.
+				if st.Opts.Inplace() && st.attrs.BasisType == rsync.FNAMECMP_FNAME && int64(i)*int64(head.BlockLength) < offset {
 					continue
 				}
 				if sum != head.Sums[i].Sum1 {

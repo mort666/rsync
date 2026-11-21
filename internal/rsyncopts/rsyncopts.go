@@ -781,12 +781,13 @@ func (o *Options) FilterRules() []string { return o.filterRules }
 // rsyncwire.MaxProtocolVersion unless --protocol asked for another.
 func (o *Options) ProtocolVersion() int32 { return int32(o.protocol_version) }
 
-// ReceiverWantsFilterList mirrors rsync/exclude.c:send_filter_list: the sender
-// transmits its filter list (so the receiver can protect matched paths from
-// --delete) only when the receiver will read it. The protocol version is
-// always 27 (< 29) here, so --delete-excluded suppresses the exchange.
-func (o *Options) ReceiverWantsFilterList() bool {
-	return o.delete_mode != 0 && o.delete_excluded == 0
+// ReceiverWantsFilterList mirrors rsync/exclude.c:send_filter_list and
+// recv_filter_list: a client sender transmits its filter list (so the
+// receiver can protect matched paths from --delete) only when the receiver
+// will read it. Below protocol 29, --delete-excluded suppresses the
+// exchange.
+func (o *Options) ReceiverWantsFilterList(proto int32) bool {
+	return o.delete_mode != 0 && (o.delete_excluded == 0 || proto >= 29)
 }
 func (o *Options) Progress() bool {
 	return o.info[INFO_PROGRESS] > 0
@@ -856,7 +857,9 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"quiet", "q", POPT_ARG_NONE, nil, 'q'},
 		{"motd", "", POPT_ARG_VAL, &o.output_motd, 1},
 		{"no-motd", "", POPT_ARG_VAL, &o.output_motd, 0},
-		//{"stats", "", POPT_ARG_NONE, &o.do_stats, 0},
+		// Accepted so that a server takes it from a client; nothing prints
+		// the statistics yet.
+		{"stats", "", POPT_ARG_NONE, &o.do_stats, 0},
 		//{"human-readable", "h", POPT_ARG_NONE, nil, 'h'},
 		//{"no-human-readable", "", POPT_ARG_VAL, &o.human_readable, 0},
 		//{"no-h", "", POPT_ARG_VAL, &o.human_readable, 0},
@@ -1029,7 +1032,10 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"log-file", "", POPT_ARG_STRING, &o.logfile_name, 0},
 		//{"log-file-format", "", POPT_ARG_STRING, &o.logfile_format, 0},
 		//{"out-format", "", POPT_ARG_STRING, &o.stdout_format, 0},
-		//{"log-format", "", POPT_ARG_STRING, &o.stdout_format, 0}, /* DEPRECATED */
+		// A client with -i sends the server --log-format=%i, for the
+		// server's own log. Accepted, and ignored, so such a client can push
+		// to a gokrazy server.
+		{"log-format", "", POPT_ARG_STRING, &o.stdout_format, 0}, /* DEPRECATED */
 		//{"itemize-changes", "i", POPT_ARG_NONE, nil, 'i'},
 		//{"no-itemize-changes", "", POPT_ARG_VAL, &o.itemize_changes, 0},
 		//{"no-i", "", POPT_ARG_VAL, &o.itemize_changes, 0},

@@ -31,6 +31,9 @@ func (l *filterRuleList) addRule(fr *filterRule) {
 // exclude.c:check_filter
 func (l *filterRuleList) matches(name string) bool {
 	for _, fr := range l.Filters {
+		if fr.flag&filtruleReceiverOnly != 0 {
+			continue // a rule for the receiver side (e.g. protect)
+		}
 		if fr.matches(name) {
 			return true
 		}
@@ -45,6 +48,9 @@ func (l *filterRuleList) matches(name string) bool {
 // is eligible for deletion per the normal source-fileList check.
 func (l *filterRuleList) Excluded(name string) bool {
 	for _, fr := range l.Filters {
+		if fr.flag&filtruleSenderOnly != 0 {
+			continue // a rule for the sender side (e.g. hide)
+		}
 		if !fr.matches(name) {
 			continue
 		}
@@ -55,6 +61,7 @@ func (l *filterRuleList) Excluded(name string) bool {
 
 // exclude.c:recv_filter_list
 func RecvFilterList(c *rsyncwire.Conn) (*filterRuleList, error) {
+	proto := c.Session.Protocol
 	var l filterRuleList
 	const exclusionListEnd = 0
 	const bigpathbuflen = 4096 + 1024 // matches rsync.h
@@ -73,7 +80,7 @@ func RecvFilterList(c *rsyncwire.Conn) (*filterRuleList, error) {
 		if _, err := io.ReadFull(c.Reader, line); err != nil {
 			return nil, err
 		}
-		fr, err := parseFilter(string(line))
+		fr, err := parseFilterProto(proto, string(line))
 		if err != nil {
 			return nil, err
 		}
@@ -90,6 +97,9 @@ const (
 	filtruleClearList
 	filtruleDirectory
 	filtruleWild
+	filtruleNegate       // '!': the rule applies where the pattern does not match
+	filtruleSenderOnly   // 's' without 'r'
+	filtruleReceiverOnly // 'r' without 's'
 )
 
 type filterRule struct {
@@ -108,11 +118,51 @@ func (fr *filterRule) matches(name string) bool {
 	if !anchored && !strings.ContainsRune(pat, '/') {
 		candidate = filepath.Base(name)
 	}
+	var ok bool
 	if fr.flag&filtruleWild != 0 {
-		ok, _ := path.Match(pat, candidate)
-		return ok
+		ok, _ = path.Match(pat, candidate)
+	} else {
+		ok = pat == candidate
 	}
-	return pat == candidate
+	return ok != (fr.flag&filtruleNegate != 0)
+}
+
+// ruleModifiers are the letters rsync may put between a rule's "-" or "+"
+// and the space from protocol 29 (exclude.c:get_rule_prefix).
+const ruleModifiers = "/!Cnw+-exsrp"
+
+// parseFilterProto parses one rule as a client sent it. Below protocol 29
+// rsync sends old-style rules (XFLG_OLD_PREFIXES): "- pattern",
+// "+ pattern" or a bare pattern to exclude. From 29 each rule is "-" or "+",
+// then modifiers, then a space and the pattern: "- foo", "-/ foo",
+// "-! foo", "+s foo".
+func parseFilterProto(proto int32, line string) (*filterRule, error) {
+	if proto < 29 || line == "" || (line[0] != '-' && line[0] != '+') {
+		return parseFilter(line)
+	}
+	sp := strings.IndexByte(line, ' ')
+	if sp < 1 || strings.Trim(line[1:sp], ruleModifiers) != "" {
+		return parseFilter(line)
+	}
+	rule := new(filterRule)
+	if line[0] == '+' {
+		rule.flag |= filtruleInclude
+	}
+	mods := line[1:sp]
+	if strings.Contains(mods, "!") {
+		rule.flag |= filtruleNegate
+	}
+	sender, receiver := strings.Contains(mods, "s"), strings.Contains(mods, "r")
+	if sender && !receiver {
+		rule.flag |= filtruleSenderOnly
+	}
+	if receiver && !sender {
+		rule.flag |= filtruleReceiverOnly
+	}
+	// '/' (match the absolute path), 'p' (perishable) and the rest only
+	// matter for features gokrazy/rsync does not have.
+	rule.pattern = line[sp+1:]
+	return rule, nil
 }
 
 // exclude.c:parse_filter_str / exclude.c:parse_rule_tok

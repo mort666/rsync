@@ -9,23 +9,21 @@ import (
 	"time"
 
 	"github.com/gokrazy/rsync"
+	"github.com/gokrazy/rsync/internal/flistcmp"
 	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 )
 
-// rsync/flist.c:flist_sort_and_clean
-func sortFileList(fileList []*File) {
-	sort.Slice(fileList, func(i, j int) bool {
-		return fileList[i].Name < fileList[j].Name
+// rsync/flist.c:flist_sort_and_clean. The sender sorts the same way and
+// both sides then name files by index, so the order must be rsync's.
+func sortFileList(proto int32, fileList []*File) {
+	sort.SliceStable(fileList, func(i, j int) bool {
+		return flistcmp.Compare(proto, fileList[i].entry(), fileList[j].entry()) < 0
 	})
 }
 
-// rsync/receiver.c:delete_files
-func findInFileList(fileList []*File, name string) bool {
-	i := sort.Search(len(fileList), func(i int) bool {
-		return fileList[i].Name >= name
-	})
-	return i < len(fileList) && fileList[i].Name == name
+func (f *File) entry() flistcmp.Entry {
+	return flistcmp.Entry{Name: f.Name, IsDir: f.Mode&rsync.S_IFMT == rsync.S_IFDIR}
 }
 
 type File struct {
@@ -305,7 +303,7 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 		fmt.Fprintf(rt.Env.Stdout, "\r%d files to consider\n", len(fileList))
 	}
 
-	sortFileList(fileList)
+	sortFileList(rt.Conn.Session.Protocol, fileList)
 
 	if rt.Opts.PreserveUid || rt.Opts.PreserveGid {
 		// receive the uid/gid list

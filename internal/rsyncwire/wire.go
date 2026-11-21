@@ -23,6 +23,7 @@ const (
 	MsgErrorSocket uint8 = 5
 	MsgLog         uint8 = 6
 	MsgSuccess     uint8 = 100 // successfully updated indicated flist index
+	MsgDeleted     uint8 = 101 // successfully deleted a file on receiving side (protocol 29+)
 )
 
 const mplexBase = 7
@@ -99,6 +100,15 @@ func (w *MultiplexReader) Read(p []byte) (n int, err error) {
 		return 0, nil
 	case MsgErrorSocket:
 		return 0, fmt.Errorf("rsync socket error: %s", strings.TrimRight(string(payload), "\n"))
+	case MsgDeleted:
+		// From protocol 29 a server receiver names each file --delete
+		// removed, for a client that asked for -v.
+		name := strings.TrimRight(string(payload), "\x00")
+		if strings.HasSuffix(string(payload), "\x00") {
+			name += "/" // directories are sent with a trailing NUL
+		}
+		w.Env.Logf("deleting %s", name)
+		return 0, nil
 	case MsgSuccess:
 		// openrsync after 7c31e9525e89515401257621ddd7fb9f8019818d
 		// ("Massive up-merge of Apple's openrsync") started

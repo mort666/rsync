@@ -43,6 +43,7 @@ var tagNames = map[uint8]string{
 	MsgErrorSocket: "ERROR_SOCKET",
 	MsgLog:         "LOG",
 	MsgSuccess:     "SUCCESS",
+	MsgDeleted:     "DELETED",
 }
 
 func tagName(tag uint8) string {

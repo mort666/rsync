@@ -139,3 +139,41 @@ func TestMatchesWildcardStar(t *testing.T) {
 		t.Errorf("* should match basename of nested path")
 	}
 }
+
+// From protocol 29 rules carry modifiers between the "-" or "+" and the
+// space; below it they are old-style.
+func TestParseFilterProto(t *testing.T) {
+	for _, tt := range []struct {
+		proto     int32
+		line      string
+		pattern   string
+		flags     int
+		excludes  string // a name the rule excludes on the receiver, "" for none
+		protected bool
+	}{
+		{27, "- foo", "foo", 0, "foo", true},
+		{27, "-r foo", "-r foo", 0, "", false}, // old-style: the whole line is a pattern
+		{29, "- foo", "foo", 0, "foo", true},
+		{29, "+ foo", "foo", filtruleInclude, "foo", false},
+		{29, "-r foo", "foo", filtruleReceiverOnly, "foo", true},
+		{29, "-s foo", "foo", filtruleSenderOnly, "foo", false},
+		{29, "-! foo", "foo", filtruleNegate, "bar", true},
+		{29, "-/ /abs", "/abs", 0, "abs", true},
+	} {
+		fr, err := parseFilterProto(tt.proto, tt.line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fr.pattern != tt.pattern || fr.flag != tt.flags {
+			t.Errorf("parseFilterProto(%d, %q) = %q flags %b, want %q flags %b", tt.proto, tt.line, fr.pattern, fr.flag, tt.pattern, tt.flags)
+		}
+		if tt.excludes == "" {
+			continue
+		}
+		var l filterRuleList
+		l.addRule(fr)
+		if got := l.Excluded(tt.excludes); got != tt.protected {
+			t.Errorf("%q at %d: Excluded(%q) = %v, want %v", tt.line, tt.proto, tt.excludes, got, tt.protected)
+		}
+	}
+}

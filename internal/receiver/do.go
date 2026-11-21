@@ -31,6 +31,10 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 		return nil
 	}
 
+	inList := make(map[string]bool, len(fileList))
+	for _, f := range fileList {
+		inList[f.Name] = true
+	}
 	for _, f := range fileList {
 		if !isTopDir(f) {
 			continue
@@ -44,7 +48,7 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 				return err
 			}
 			rt.Logger.Printf("WalkDir(%q)", path)
-			if findInFileList(fileList, path) {
+			if inList[path] {
 				return nil
 			}
 			if rt.Excluded != nil && rt.Excluded(path) {
@@ -136,7 +140,7 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 	}
 
 	// send final goodbye message
-	if err := c.WriteInt32(-1); err != nil {
+	if err := c.WriteNdx(rsyncwire.NdxDone); err != nil {
 		return nil, err
 	}
 
@@ -161,8 +165,19 @@ func (rt *Transfer) report(c *rsyncwire.Conn) (*rsyncstats.TransferStats, error)
 	if err != nil {
 		return nil, err
 	}
+	// From protocol 29: how long the sender took to build and to send the
+	// file list, in milliseconds.
+	var flistBuild, flistXfer int64
+	if c.Session.Protocol >= 29 {
+		if flistBuild, err = c.ReadVarlong30(3); err != nil {
+			return nil, err
+		}
+		if flistXfer, err = c.ReadVarlong30(3); err != nil {
+			return nil, err
+		}
+	}
 	if rt.Opts.InfoGTE(rsyncopts.INFO_STATS, 1) {
-		rt.Logger.Printf("server sent stats: read=%d, written=%d, size=%d", read, written, size)
+		rt.Logger.Printf("server sent stats: read=%d, written=%d, size=%d, flist build=%dms, xfer=%dms", read, written, size, flistBuild, flistXfer)
 	}
 
 	return &rsyncstats.TransferStats{

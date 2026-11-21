@@ -27,6 +27,37 @@ const (
 	XMIT_RDEV_MINOR_IS_SMALL = XMIT_RDEV_MINOR_8_pre30
 )
 
+// Item flags (rsync.h), sent with each file index from protocol 29. The
+// generator says what it wants and why; the sender echoes them back.
+const (
+	ITEM_REPORT_ATIME       = (1 << 0)
+	ITEM_REPORT_CHANGE      = (1 << 1)
+	ITEM_REPORT_SIZE        = (1 << 2) // regular files only
+	ITEM_REPORT_TIMEFAIL    = (1 << 2) // symlinks only
+	ITEM_REPORT_TIME        = (1 << 3)
+	ITEM_REPORT_PERMS       = (1 << 4)
+	ITEM_REPORT_OWNER       = (1 << 5)
+	ITEM_REPORT_GROUP       = (1 << 6)
+	ITEM_REPORT_ACL         = (1 << 7)
+	ITEM_REPORT_XATTR       = (1 << 8)
+	ITEM_REPORT_CRTIME      = (1 << 10)
+	ITEM_BASIS_TYPE_FOLLOWS = (1 << 11) // a basis-type byte follows
+	ITEM_XNAME_FOLLOWS      = (1 << 12) // an alternate name (vstring) follows
+	ITEM_IS_NEW             = (1 << 13)
+	ITEM_LOCAL_CHANGE       = (1 << 14)
+	ITEM_TRANSFER           = (1 << 15) // the generator wants the file's data
+)
+
+// Basis types (rsync.h): which file the generator's checksums came from,
+// sent after ITEM_BASIS_TYPE_FOLLOWS. Values below FNAMECMP_FNAME index the
+// --compare-dest/--copy-dest/--link-dest directories.
+const (
+	FNAMECMP_FNAME       = 0x80
+	FNAMECMP_PARTIAL_DIR = 0x81
+	FNAMECMP_BACKUP      = 0x82
+	FNAMECMP_FUZZY       = 0x83
+)
+
 // as per /usr/include/bits/stat.h:
 const (
 	S_IFMT   = 0o0170000 // bits determining the file type

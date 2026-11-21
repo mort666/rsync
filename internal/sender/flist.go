@@ -24,6 +24,7 @@ type file struct {
 	path    string
 	Wpath   string
 	regular bool
+	isDir   bool
 
 	// fields below are used by the receiver (TODO: unify)
 	Name       string
@@ -38,6 +39,7 @@ type file struct {
 
 type fileList struct {
 	TotalSize int64
+	BuildTime time.Duration
 	Files     []file
 	Sources   []FileSource
 }
@@ -220,6 +222,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		source:  s.source,
 		path:    path,
 		regular: info.Mode().IsRegular(),
+		isDir:   info.IsDir(),
 		Wpath:   name,
 		Length:  info.Size(),
 	})

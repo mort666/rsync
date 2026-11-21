@@ -11,30 +11,40 @@ import (
 
 	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
+	"github.com/gokrazy/rsync/internal/rsyncwire"
 	"github.com/mmcloughlin/md4"
 )
 
 // rsync/receiver.c:recv_files
 func (rt *Transfer) RecvFiles(fileList []*File) error {
+	maxPhase := 1
+	if rt.Conn.Session.Protocol >= 29 {
+		maxPhase = 2 // the --delay-updates pass
+	}
 	phase := 0
 	for {
-		idx, err := rt.Conn.ReadInt32()
+		idx, attrs, err := rt.Conn.ReadNdxAndAttrs(len(fileList))
 		if err != nil {
 			return err
 		}
-		if idx == -1 {
-			if phase == 0 {
-				phase++
-				if rt.Opts.DebugGTE(rsyncopts.DEBUG_RECV, 1) {
-					rt.Logger.Printf("recvFiles phase=%d", phase)
-				}
-				// TODO: send done message
-				continue
+		if idx == rsyncwire.NdxDone {
+			phase++
+			if phase > maxPhase {
+				break
 			}
-			break
+			if rt.Opts.DebugGTE(rsyncopts.DEBUG_RECV, 1) {
+				rt.Logger.Printf("recvFiles phase=%d", phase)
+			}
+			// TODO: send done message
+			continue
 		}
-		if idx < 0 || int(idx) >= len(fileList) {
-			return fmt.Errorf("protocol error: idx=%d out of bounds", idx)
+		if !attrs.Transfer() {
+			// An item the generator reported on (protocol 29+), which the
+			// sender echoes: no data follows.
+			continue
+		}
+		if fileList[idx].Mode&rsync.S_IFMT != rsync.S_IFREG {
+			return fmt.Errorf("received request to transfer non-regular file: %d", idx)
 		}
 
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_RECV, 1) {

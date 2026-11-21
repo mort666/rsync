@@ -61,7 +61,11 @@ type Transfer struct {
 	OnSend func(name string)
 
 	// state
-	redo      bool // in the redo pass: OnSend told of its files already
+	redo bool // in the redo pass: OnSend told of its files already
+
+	// attrs are the item attributes the generator sent with the file being
+	// sent, echoed back before its data (protocol 29+).
+	attrs     rsyncwire.ItemAttrs
 	Conn      *rsyncwire.Conn
 	Seed      int32
 	lastMatch int64

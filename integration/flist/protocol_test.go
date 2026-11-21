@@ -57,20 +57,38 @@ func stock(t *testing.T, args ...string) (string, error) {
 
 func startStockDaemon(t *testing.T, dir string) string {
 	t.Helper()
+	return startStockDaemonModule(t, dir, true)
+}
+
+func startStockDaemonModule(t *testing.T, dir string, readOnly bool) string {
+	t.Helper()
+	addr, _ := startStockDaemonConf(t, dir, fmt.Sprintf("  read only = %v\n", readOnly))
+	return addr
+}
+
+// startStockDaemonConf serves dir as module mod with the extra module
+// settings in conf (each line indented, ending in a newline). It returns
+// the address and the daemon's log file.
+func startStockDaemonConf(t *testing.T, dir, conf string) (addr, logFile string) {
+	t.Helper()
 	bin := rsynctest.TridgeOrGTFO(t, "compares with the stock daemon")
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := l.Addr().String()
+	addr = l.Addr().String()
 	_, port, _ := net.SplitHostPort(addr)
 	l.Close()
-	conf := filepath.Join(t.TempDir(), "rsyncd.conf")
-	cfg := fmt.Sprintf("use chroot = no\nport = %s\n[mod]\n  path = %s\n  read only = yes\n", port, dir)
-	if err := os.WriteFile(conf, []byte(cfg), 0o644); err != nil {
+	confFile := filepath.Join(t.TempDir(), "rsyncd.conf")
+	cfg := fmt.Sprintf("use chroot = no\nport = %s\n[mod]\n  path = %s\n%s", port, dir, conf)
+	if !strings.Contains(conf, "read only") {
+		cfg += "  read only = yes\n"
+	}
+	if err := os.WriteFile(confFile, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, "--daemon", "--no-detach", "--config="+conf, "--port="+port, "--log-file="+filepath.Join(filepath.Dir(conf), "d.log"))
+	logFile = filepath.Join(filepath.Dir(confFile), "d.log")
+	cmd := exec.Command(bin, "--daemon", "--no-detach", "--config="+confFile, "--port="+port, "--log-file="+logFile)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -78,19 +96,27 @@ func startStockDaemon(t *testing.T, dir string) string {
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
 		if c, err := net.Dial("tcp", addr); err == nil {
 			c.Close()
-			return addr
+			return addr, logFile
 		}
 	}
 	t.Fatal("stock rsync daemon did not come up")
-	return ""
+	return "", ""
 }
 
 // gokrazyPull runs a gokrazy client with args against mod/<path> on the
 // daemon at addr, into dest, returning what it logged.
 func gokrazyPull(t *testing.T, addr, path, dest string, args ...string) (string, error) {
 	t.Helper()
+	return gokrazyRun(t, addr, "mod/"+path, []string{dest}, nil, args...)
+}
+
+// gokrazyRun runs a gokrazy client against remotePath on the daemon at addr.
+// paths are the destination when it receives, the sources when it sends.
+func gokrazyRun(t *testing.T, addr, remotePath string, paths []string, extra []rsyncclient.Option, args ...string) (string, error) {
+	t.Helper()
 	var log bytes.Buffer
-	client, err := rsyncclient.New(args, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(rsynctest.NopClose(io.MultiWriter(&log, testlogger.New(t)))), rsyncclient.DontRestrict())
+	opts := append([]rsyncclient.Option{rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(rsynctest.NopClose(io.MultiWriter(&log, testlogger.New(t)))), rsyncclient.DontRestrict()}, extra...)
+	client, err := rsyncclient.New(args, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +125,7 @@ func gokrazyPull(t *testing.T, addr, path, dest string, args ...string) (string,
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	_, err = client.RunDaemon(t.Context(), conn, "mod/"+path, []string{dest})
+	_, err = client.RunDaemon(t.Context(), conn, remotePath, paths)
 	return log.String(), err
 }
 

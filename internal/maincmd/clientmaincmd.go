@@ -403,7 +403,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		// send_file_list. The receiver's recv_filter_list reads it only when it
 		// wants the list (delete mode), so gate the write the same way to stay
 		// in sync with a stock rsync daemon.
-		if opts.ReceiverWantsFilterList() {
+		if opts.ReceiverWantsFilterList(c.Session.Protocol) {
 			for _, rule := range opts.FilterRules() {
 				if err := c.WriteInt32(int32(len(rule))); err != nil {
 					return nil, nil, err

@@ -21,40 +21,63 @@ import (
 
 // rsync/sender.c:send_files()
 func (st *Transfer) SendFiles(fileList *fileList) error {
+	// Phases end with NDX_DONE from the generator, which the sender echoes:
+	// the files, then the redo pass, and from protocol 29 the
+	// --delay-updates pass.
+	maxPhase := 1
+	if st.Conn.Session.Protocol >= 29 {
+		maxPhase = 2
+	}
 	phase := 0
 	for {
 		// receive data about receiver’s copy of the file list contents (not
 		// ordered)
 		// see (*rsync.Receiver).Generator()
-		fileIndex, err := st.Conn.ReadInt32()
+		fileIndex, attrs, err := st.Conn.ReadNdxAndAttrs(len(fileList.Files))
 		if err != nil {
 			return err
 		}
-		if fileIndex == -1 {
-			if phase == 0 {
-				phase++
-				st.redo = true
-				// acknowledge phase change by sending -1
-				if err := st.Conn.WriteInt32(-1); err != nil {
-					return err
-				}
-				continue
+		if fileIndex == rsyncwire.NdxDone {
+			phase++
+			if phase > maxPhase {
+				break
 			}
-			break
-		}
-
-		if fileIndex < 0 || int(fileIndex) >= len(fileList.Files) {
-			return fmt.Errorf("protocol error: idx=%d out of bounds", fileIndex)
-		}
-
-		if st.Opts.DryRun() {
-			if err := st.Conn.WriteInt32(fileIndex); err != nil {
+			if phase == 1 {
+				st.redo = true
+			}
+			// acknowledge phase change
+			if err := st.Conn.WriteNdx(rsyncwire.NdxDone); err != nil {
 				return err
 			}
 			continue
 		}
 
 		fl := fileList.Files[fileIndex]
+
+		// From protocol 29 the generator also names files it only wants
+		// to report on (rsync's itemize). There is nothing to send but the
+		// attributes back.
+		if !attrs.Transfer() {
+			if err := st.Conn.WriteNdxAndAttrs(fileIndex, attrs); err != nil {
+				return err
+			}
+			continue
+		}
+		if !fl.regular {
+			return fmt.Errorf("received request to transfer non-regular file: %d", fileIndex)
+		}
+		if phase == 2 {
+			return fmt.Errorf("got transfer request in phase 2")
+		}
+		st.attrs = attrs
+
+		if st.Opts.DryRun() {
+			if err := st.Conn.WriteNdxAndAttrs(fileIndex, attrs); err != nil {
+				return err
+			}
+			continue
+		}
+
 		st.Progress.Reset(uint64(fl.Length))
 
 		// In phase 0 with --append, the receiver sends only the sum head; in
@@ -138,7 +161,7 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 	}
 
 	// phase done
-	if err := st.Conn.WriteInt32(-1); err != nil {
+	if err := st.Conn.WriteNdx(rsyncwire.NdxDone); err != nil {
 		return err
 	}
 
@@ -221,7 +244,7 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 		return err
 	}
 
-	if err := st.Conn.WriteInt32(fileIndex); err != nil {
+	if err := st.Conn.WriteNdxAndAttrs(fileIndex, st.attrs); err != nil {
 		return err
 	}
 

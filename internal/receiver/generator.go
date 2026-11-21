@@ -14,6 +14,7 @@ import (
 	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsynccommon"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
+	"github.com/gokrazy/rsync/internal/rsyncwire"
 )
 
 // rsync/generator.c:generate_files()
@@ -28,7 +29,7 @@ func (rt *Transfer) GenerateFiles(fileList []*File) error {
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 		rt.Logger.Printf("generateFiles phase=%d", phase)
 	}
-	if err := rt.Conn.WriteInt32(-1); err != nil {
+	if err := rt.Conn.WriteNdx(rsyncwire.NdxDone); err != nil {
 		return err
 	}
 
@@ -37,8 +38,21 @@ func (rt *Transfer) GenerateFiles(fileList []*File) error {
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 		rt.Logger.Printf("generateFiles phase=%d", phase)
 	}
-	if err := rt.Conn.WriteInt32(-1); err != nil {
+	if err := rt.Conn.WriteNdx(rsyncwire.NdxDone); err != nil {
 		return err
+	}
+
+	// From protocol 29 a third phase is for --delay-updates. Without it,
+	// rsync closes the phase right away (EARLY_DELAY_DONE_MSG), and so do
+	// we.
+	if rt.Conn.Session.Protocol >= 29 {
+		phase++
+		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
+			rt.Logger.Printf("generateFiles phase=%d", phase)
+		}
+		if err := rt.Conn.WriteNdx(rsyncwire.NdxDone); err != nil {
+			return err
+		}
 	}
 
 	// NOTE: touchUpDirs is called from [Transfer.Do]
@@ -252,11 +266,11 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		return nil
 	}
 
-	requestFullFile := func() error {
+	requestFullFile := func(iflags uint32) error {
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			rt.Logger.Printf("requesting: %s", f.Name)
 		}
-		if err := rt.Conn.WriteInt32(int32(idx)); err != nil {
+		if err := rt.requestFile(idx, iflags, rsync.FNAMECMP_FNAME); err != nil {
 			return err
 		}
 		if rt.Opts.DryRun {
@@ -281,7 +295,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 	}
 
 	if os.IsNotExist(err) {
-		return requestFullFile()
+		return requestFullFile(rsync.ITEM_IS_NEW)
 	}
 	if err != nil {
 		return err
@@ -293,7 +307,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		if err := rt.DestRoot.Remove(f.Name); err != nil {
 			return fmt.Errorf("unlinking to make room for regular file: %v", err)
 		}
-		return requestFullFile()
+		return requestFullFile(rsync.ITEM_IS_NEW)
 	}
 
 	// TODO: update-only check
@@ -322,19 +336,17 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		return nil
 	}
 
-	if rt.Opts.DryRun {
-		if err := rt.Conn.WriteInt32(int32(idx)); err != nil {
-			return err
-		}
+	changed := rt.changedFlags(f, st)
 
-		return nil
+	if rt.Opts.DryRun {
+		return rt.requestFile(idx, changed, rsync.FNAMECMP_FNAME)
 	}
 
 	if rt.Opts.AppendMode > 0 && st.Size() > 0 && st.Size() < f.Length {
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			rt.Logger.Printf("append: sending prefix sum head for %s (%d/%d bytes)", f.Name, st.Size(), f.Length)
 		}
-		if err := rt.Conn.WriteInt32(int32(idx)); err != nil {
+		if err := rt.requestFile(idx, changed, rsync.FNAMECMP_FNAME); err != nil {
 			return err
 		}
 		// Match rsync/generator.c: in --append mode, send only the sum head;
@@ -345,20 +357,20 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 	}
 
 	if rt.Opts.WholeFile {
-		return requestFullFile()
+		return requestFullFile(changed)
 	}
 
 	in, err := rt.DestRoot.Open(f.Name)
 	if err != nil {
 		rt.Logger.Printf("failed to open %s, continuing: %v", local, err)
-		return requestFullFile()
+		return requestFullFile(changed)
 	}
 	defer in.Close()
 
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 		rt.Logger.Printf("sending sums for: %s", f.Name)
 	}
-	if err := rt.Conn.WriteInt32(int32(idx)); err != nil {
+	if err := rt.requestFile(idx, changed, rsync.FNAMECMP_FNAME); err != nil {
 		return err
 	}
 
@@ -389,12 +401,10 @@ func (rt *Transfer) recvGeneratorPartial(idx int, f *File) (bool, error) {
 		return false, nil
 	}
 
+	// The checksums come from the file in --partial-dir, which the
+	// generator tells the sender from protocol 29.
 	if rt.Opts.DryRun {
-		if err := rt.Conn.WriteInt32(int32(idx)); err != nil {
-			return true, err
-		}
-
-		return true, nil
+		return true, rt.requestFile(idx, 0, rsync.FNAMECMP_PARTIAL_DIR)
 	}
 
 	// TODO: if deltas are disabled, request the file in full
@@ -402,11 +412,40 @@ func (rt *Transfer) recvGeneratorPartial(idx int, f *File) (bool, error) {
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 		rt.Logger.Printf("sending sums for: %s", f.Name)
 	}
-	if err := rt.Conn.WriteInt32(int32(idx)); err != nil {
+	if err := rt.requestFile(idx, 0, rsync.FNAMECMP_PARTIAL_DIR); err != nil {
 		return true, err
 	}
 
 	return true, rt.generateAndSendSums(partial, st.Size())
+}
+
+// requestFile asks the sender for a file's data: its index, and from
+// protocol 29 the item flags (ITEM_TRANSFER and why) and, when the checksums
+// that follow are not of the destination file, where they came from.
+func (rt *Transfer) requestFile(idx int, iflags uint32, basis byte) error {
+	a := rsyncwire.ItemAttrs{Iflags: rsync.ITEM_TRANSFER | iflags, BasisType: rsync.FNAMECMP_FNAME}
+	if basis != rsync.FNAMECMP_FNAME {
+		a.Iflags |= rsync.ITEM_BASIS_TYPE_FOLLOWS
+		a.BasisType = basis
+	}
+	return rt.Conn.WriteNdxAndAttrs(int32(idx), a)
+}
+
+// changedFlags are the report flags of rsync's itemize for a regular file
+// the generator found at the destination: what about it differs. A sender
+// that itemizes (-i) prints them.
+func (rt *Transfer) changedFlags(f *File, st os.FileInfo) uint32 {
+	var iflags uint32
+	if st.Size() != f.Length {
+		iflags |= rsync.ITEM_REPORT_SIZE
+	}
+	if rt.Opts.PreserveTimes && !modTimeEqual(st.ModTime(), f.ModTime) {
+		iflags |= rsync.ITEM_REPORT_TIME
+	}
+	if rt.Opts.AlwaysChecksum {
+		iflags |= rsync.ITEM_REPORT_CHANGE
+	}
+	return iflags
 }
 
 // rsync/generator.c:generate_and_send_sums
