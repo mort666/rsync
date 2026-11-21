@@ -22,12 +22,12 @@ import (
 func listGorsync(t *testing.T, src string, flags []string, req string, opts ...rsyncclient.Option) *rsyncclient.Result {
 	t.Helper()
 	stderr := testlogger.New(t)
-	client, err := rsyncclient.New(flags, append([]rsyncclient.Option{rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(stderr)}, opts...)...)
+	client, err := rsyncclient.New(flags, append([]rsyncclient.Option{rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(stderr), rsyncclient.DontRestrict()}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mod := rsyncd.Module{Name: "tmp", Path: src}
-	srv, err := rsyncd.NewServer([]rsyncd.Module{mod}, rsyncd.WithStderr(stderr))
+	srv, err := rsyncd.NewServer([]rsyncd.Module{mod}, rsyncd.WithStderr(stderr), rsyncd.DontRestrict())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func listGorsync(t *testing.T, src string, flags []string, req string, opts ...r
 // listStock runs the same dry run against stock rsync as the sender, in src.
 func listStock(t *testing.T, src string, flags []string, req string) *rsyncclient.Result {
 	t.Helper()
-	client, err := rsyncclient.New(flags, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(testlogger.New(t)))
+	client, err := rsyncclient.New(flags, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(testlogger.New(t)), rsyncclient.DontRestrict())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +74,7 @@ func listStock(t *testing.T, src string, flags []string, req string) *rsyncclien
 		t.Fatal(err)
 	}
 	res, err := client.Run(t.Context(), &rsync.BothCloser{ReadCloser: stdout, WriteCloser: stdin}, []string{t.TempDir()})
+	stdin.Close() // otherwise a Run that failed early leaves rsync, and Wait, blocked on stdin
 	cmd.Wait()
 	if err != nil {
 		t.Fatal(err)

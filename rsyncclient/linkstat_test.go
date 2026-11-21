@@ -41,12 +41,12 @@ func (m *msgLog) String() string {
 func listOne(t *testing.T, dir string, flags []string, requested string) (*rsyncclient.Result, string) {
 	t.Helper()
 	msgs := &msgLog{}
-	client, err := rsyncclient.New(flags, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(msgs))
+	client, err := rsyncclient.New(flags, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(msgs), rsyncclient.DontRestrict())
 	if err != nil {
 		t.Fatal(err)
 	}
 	mod := rsyncd.Module{Name: "tmp", Path: dir}
-	srv, err := rsyncd.NewServer([]rsyncd.Module{mod}, rsyncd.WithStderr(testlogger.New(t)))
+	srv, err := rsyncd.NewServer([]rsyncd.Module{mod}, rsyncd.WithStderr(testlogger.New(t)), rsyncd.DontRestrict())
 	if err != nil {
 		t.Fatal(err)
 	}

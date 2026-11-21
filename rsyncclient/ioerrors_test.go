@@ -56,12 +56,12 @@ func names(list []rsync.FileInfo) []string {
 func TestResultIOErrorsFromGorsyncSender(t *testing.T) {
 	src := unreadableTree(t)
 	stderr := testlogger.New(t)
-	client, err := rsyncclient.New([]string{"-n", "-r"}, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(stderr))
+	client, err := rsyncclient.New([]string{"-n", "-r"}, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(stderr), rsyncclient.DontRestrict())
 	if err != nil {
 		t.Fatal(err)
 	}
 	mod := rsyncd.Module{Name: "tmp", Path: src}
-	srv, err := rsyncd.NewServer([]rsyncd.Module{mod}, rsyncd.WithStderr(stderr))
+	srv, err := rsyncd.NewServer([]rsyncd.Module{mod}, rsyncd.WithStderr(stderr), rsyncd.DontRestrict())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestResultIOErrorsFromStockRsync(t *testing.T) {
 	if _, err := exec.LookPath("rsync"); err != nil {
 		t.Skip("no rsync binary")
 	}
-	client, err := rsyncclient.New([]string{"-n", "-r"}, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(testlogger.New(t)))
+	client, err := rsyncclient.New([]string{"-n", "-r"}, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(testlogger.New(t)), rsyncclient.DontRestrict())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +115,7 @@ func TestResultIOErrorsFromStockRsync(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := client.Run(t.Context(), &rsync.BothCloser{ReadCloser: stdout, WriteCloser: stdin}, []string{t.TempDir()})
+	stdin.Close() // otherwise a Run that failed early leaves rsync, and Wait, blocked on stdin
 	cmd.Wait()
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +134,7 @@ func TestResultIOErrorsZeroWhenComplete(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	client, err := rsyncclient.New([]string{"-n", "-r"}, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(testlogger.New(t)))
+	client, err := rsyncclient.New([]string{"-n", "-r"}, rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(testlogger.New(t)), rsyncclient.DontRestrict())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +145,7 @@ func TestResultIOErrorsZeroWhenComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := client.Run(t.Context(), &rsync.BothCloser{ReadCloser: stdout, WriteCloser: stdin}, []string{t.TempDir()})
+	stdin.Close() // otherwise a Run that failed early leaves rsync, and Wait, blocked on stdin
 	cmd.Wait()
 	if err != nil {
 		t.Fatal(err)
