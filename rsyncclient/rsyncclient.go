@@ -210,9 +210,19 @@ type Result struct {
 // returned as an error: it fails this run, not the program.
 func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []string) (_ *Result, err error) {
 	defer panicerr.Recover(&err)
+	var remoteProtocol int32 // exchanged on conn
+	if !c.negotiate {
+		// WithoutNegotiate: the caller settled the version some other way,
+		// so assume the peer speaks the one we would announce.
+		remoteProtocol = c.opts.ProtocolVersion()
+	}
+	return c.run(ctx, conn, paths, remoteProtocol)
+}
+
+func (c *Client) run(ctx context.Context, conn io.ReadWriteCloser, paths []string, remoteProtocol int32) (*Result, error) {
 	c.osenv.XferErrors.Store(0)
 	c.osenv.IOErrors.Store(0)
-	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, c.negotiate, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend, SendOnly: c.sendOnly, OnSend: c.onSend})
+	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, remoteProtocol, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend, SendOnly: c.sendOnly, OnSend: c.onSend})
 	if err != nil {
 		return nil, err
 	}
@@ -230,13 +240,12 @@ func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []strin
 // Canceling ctx closes conn, which aborts the transfer.
 func (c *Client) RunDaemon(ctx context.Context, conn io.ReadWriteCloser, remotePath string, paths []string) (_ *Result, err error) {
 	defer panicerr.Recover(&err)
-	done, err := maincmd.StartInbandExchange(ctx, c.osenv, c.opts, conn, remotePath)
+	done, remoteProtocol, err := maincmd.StartInbandExchange(ctx, c.osenv, c.opts, conn, remotePath)
 	if err != nil {
 		return nil, err
 	}
 	if done { // Server sent EXIT
 		return &Result{Stats: &rsyncstats.TransferStats{}}, nil
 	}
-	c.negotiate = false // done as part of the inband exchange
-	return c.Run(ctx, conn, paths)
+	return c.run(ctx, conn, paths, remoteProtocol)
 }

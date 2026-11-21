@@ -155,6 +155,9 @@ func (b *Buffer) Reset() {
 type Conn struct {
 	Writer io.WriteCloser
 	Reader io.ReadCloser
+
+	// Session is set once the protocol version is negotiated.
+	Session Session
 }
 
 func (c *Conn) Close() error {

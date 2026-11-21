@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/restrict"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
@@ -83,14 +82,14 @@ func socketClient(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Optio
 			return nil, err
 		}
 	}
-	done, err := startInbandExchange(osenv, opts, conn, remotePath, urlUser, urlPass)
+	done, remoteProtocol, err := startInbandExchange(osenv, opts, conn, remotePath, urlUser, urlPass)
 	if err != nil {
 		return nil, err
 	}
 	if done {
 		return nil, nil
 	}
-	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, false, ClientHooks{})
+	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, remoteProtocol, ClientHooks{})
 	if err != nil {
 		return nil, err
 	}
@@ -99,14 +98,16 @@ func socketClient(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Optio
 
 // StartInbandExchange is the public API for daemon-over-remote-shell
 // and the rsyncclient package. Auth credentials come from env/file only.
-func StartInbandExchange(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, remotePath string) (done bool, _ error) {
+func StartInbandExchange(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, remotePath string) (done bool, remoteProtocol int32, _ error) {
 	conn, stop := rsyncwire.WrapCtx(ctx, conn)
 	defer stop()
 	return startInbandExchange(osenv, opts, conn, remotePath, "", "")
 }
 
 // rsync/clientserver.c:start_inband_exchange
-func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, remotePath string, urlUser, urlPass string) (done bool, _ error) {
+//
+// remoteProtocol is the version from the server's greeting, for ClientRun.
+func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriter, remotePath string, urlUser, urlPass string) (done bool, remoteProtocol int32, _ error) {
 	module := remotePath
 	if idx := strings.IndexByte(module, '/'); idx > -1 {
 		module = module[:idx]
@@ -117,33 +118,38 @@ func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.Re
 	conn = clientTrace(osenv, opts).WrapReadWriter(conn)
 	rd := bufio.NewReader(conn)
 
+	if err := rsyncwire.CheckProtocolOption("Client", opts.ProtocolVersion()); err != nil {
+		return false, 0, err
+	}
 	// send client greeting
-	fmt.Fprintf(conn, "@RSYNCD: %d\n", rsync.ProtocolVersion)
+	fmt.Fprintf(conn, "@RSYNCD: %d\n", opts.ProtocolVersion())
 
 	// read server greeting
 	line, err := rd.ReadSlice('\n')
 	if err != nil {
-		return false, fmt.Errorf("reading server greeting: %v", err)
+		return false, 0, fmt.Errorf("reading server greeting: %v", err)
 	}
 	serverGreeting := strings.TrimSpace(string(line))
 	const serverGreetingPrefix = "@RSYNCD: "
 	if !strings.HasPrefix(serverGreeting, serverGreetingPrefix) {
-		return false, fmt.Errorf("invalid server greeting: got %q", serverGreeting)
+		return false, 0, fmt.Errorf("invalid server greeting: got %q", serverGreeting)
 	}
-	// protocol negotiation: require at least version 27
 	serverGreeting = strings.TrimPrefix(serverGreeting, serverGreetingPrefix)
-	var remoteProtocol, remoteSub int32
+	var remoteSub int32
 	if _, err := fmt.Sscanf(serverGreeting, "%d.%d", &remoteProtocol, &remoteSub); err != nil {
 		if _, err := fmt.Sscanf(serverGreeting, "%d", &remoteProtocol); err != nil {
-			return false, fmt.Errorf("reading server greeting: %v", err)
+			return false, 0, fmt.Errorf("reading server greeting: %v", err)
 		}
 	}
-	if remoteProtocol < 27 {
-		return false, fmt.Errorf("server version %d too old", remoteProtocol)
+	// ClientRun negotiates; checking here as well stops before the module
+	// request on a server we cannot talk to.
+	negotiated, err := rsyncwire.NegotiateProtocol("Client", opts.ProtocolVersion(), remoteProtocol)
+	if err != nil {
+		return false, 0, err
 	}
 
 	if opts.Verbose() {
-		osenv.Logf("(Client) Protocol versions: remote=%d, negotiated=%d", remoteProtocol, rsync.ProtocolVersion)
+		osenv.Logf("(Client) Protocol versions: remote=%d, negotiated=%d", remoteProtocol, negotiated)
 		osenv.Logf("Client checksum: md4")
 	}
 
@@ -152,7 +158,7 @@ func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.Re
 	for {
 		b, err := rd.ReadSlice('\n')
 		if err != nil {
-			return false, fmt.Errorf("did not get server startup line: %v", err)
+			return false, 0, fmt.Errorf("did not get server startup line: %v", err)
 		}
 		line := strings.TrimSpace(string(b))
 		if opts.DebugGTE(rsyncopts.DEBUG_PROTO, 1) {
@@ -164,7 +170,7 @@ func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.Re
 			authUser := resolveUsername(urlUser)
 			pass, err := getPassword(opts, urlPass)
 			if err != nil {
-				return false, fmt.Errorf("authentication required: %v", err)
+				return false, 0, fmt.Errorf("authentication required: %v", err)
 			}
 			hash := generateAuthHash(pass, challenge)
 			fmt.Fprintf(conn, "%s %s\n", authUser, hash)
@@ -176,12 +182,12 @@ func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.Re
 		}
 
 		if line == "@RSYNCD: EXIT" {
-			return true, nil
+			return true, 0, nil
 		}
 
 		if strings.HasPrefix(line, "@ERROR") {
 			fmt.Fprintf(osenv.Stderr, "%s\n", line)
-			return false, fmt.Errorf("abort (rsync fatal error)")
+			return false, 0, fmt.Errorf("abort (rsync fatal error)")
 		}
 
 		if opts.OutputMOTD() {
@@ -201,7 +207,7 @@ func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.Re
 	}
 	fmt.Fprintf(conn, "\n")
 
-	return false, nil
+	return false, remoteProtocol, nil
 }
 
 // resolveUsername returns the auth username from (in priority order):

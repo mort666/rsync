@@ -226,17 +226,31 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	rd := conn.rd
 	// send server greeting
 
-	fmt.Fprintf(cwr, "@RSYNCD: %d\n", rsync.ProtocolVersion)
+	fmt.Fprintf(cwr, "@RSYNCD: %d\n", rsyncwire.MaxProtocolVersion)
 
 	// read client greeting
 	clientGreeting, err := rd.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
-	if got := string(clientGreeting); !strings.HasPrefix(got, "@RSYNCD: ") {
-		return fmt.Errorf("invalid client greeting: got %q", got)
+	got, ok := strings.CutPrefix(strings.TrimSpace(string(clientGreeting)), "@RSYNCD: ")
+	if !ok {
+		return fmt.Errorf("invalid client greeting: got %q", clientGreeting)
 	}
-	// TODO: protocol negotiation
+	// A greeting from protocol 30 on reads "31.0", from 3.2.7 on followed by
+	// a list of auth digests. Only the major version matters here.
+	var remoteProtocol int32
+	if _, err := fmt.Sscanf(got, "%d", &remoteProtocol); err != nil {
+		io.WriteString(cwr, "@ERROR: protocol startup error\n")
+		return fmt.Errorf("invalid client greeting: got %q", clientGreeting)
+	}
+	// handleConn negotiates again once the client's --protocol is known.
+	// Checking now refuses a client we cannot talk to before it picks a
+	// module.
+	if _, err := rsyncwire.NegotiateProtocol("Server", rsyncwire.MaxProtocolVersion, remoteProtocol); err != nil {
+		fmt.Fprintf(cwr, "@ERROR: %v\n", err)
+		return err
+	}
 
 	// read requested module(s), if any
 	line, err := rd.ReadSlice('\n')
@@ -337,7 +351,7 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 
 	s.logger.Printf("expanded paths: %q", pc.RemainingArgs[1:])
 
-	return s.handleConn(ctx, conn, &module, pc, false)
+	return s.handleConn(ctx, conn, &module, pc, remoteProtocol)
 }
 
 type Conn struct {
@@ -366,7 +380,7 @@ func NewConnection(r io.ReadCloser, w io.WriteCloser, name string) *Conn {
 
 // This method is only exported until we refactor; use HandleConnArgs() instead
 func (s *Server) InternalHandleConn(ctx context.Context, conn *Conn, module *Module, pc *rsyncopts.Context) error {
-	return s.handleConn(ctx, conn, module, pc, true /* negotiate */)
+	return s.handleConn(ctx, conn, module, pc, 0 /* exchange versions */)
 }
 
 func (s *Server) HandleConnArgs(ctx context.Context, conn *Conn, module *Module, args []string) error {
@@ -375,11 +389,14 @@ func (s *Server) HandleConnArgs(ctx context.Context, conn *Conn, module *Module,
 	if err := pc.ParseArguments(osenv, args); err != nil {
 		return fmt.Errorf("parsing server args: %v", err)
 	}
-	return s.handleConn(ctx, conn, module, pc, true /* negotiate */)
+	return s.handleConn(ctx, conn, module, pc, 0 /* exchange versions */)
 }
 
 // handleConn is equivalent to rsync/main.c:start_server
-func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc *rsyncopts.Context, negotiate bool) (err error) {
+//
+// remoteProtocol is the version from the client's daemon greeting. When it is
+// 0, both sides exchange versions on conn first, as over a remote shell.
+func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc *rsyncopts.Context, remoteProtocol int32) (err error) {
 	rd := conn.rd
 	crd := conn.crd
 	cwr := conn.cwr
@@ -405,17 +422,25 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 		Writer: cwr,
 	}
 
-	if negotiate {
-		remoteProtocol, err := c.ReadInt32()
+	if err := rsyncwire.CheckProtocolOption("Server", opts.ProtocolVersion()); err != nil {
+		return err
+	}
+	if remoteProtocol == 0 {
+		remoteProtocol, err = c.ReadInt32()
 		if err != nil {
 			return err
 		}
-		if opts.DebugGTE(rsyncopts.DEBUG_PROTO, 1) {
-			s.logger.Printf("remote protocol: %d", remoteProtocol)
-		}
-		if err := c.WriteInt32(rsync.ProtocolVersion); err != nil {
+		if err := c.WriteInt32(opts.ProtocolVersion()); err != nil {
 			return err
 		}
+	}
+	proto, err := rsyncwire.NegotiateProtocol("Server", opts.ProtocolVersion(), remoteProtocol)
+	if err != nil {
+		return err
+	}
+	c.Session.Protocol = proto
+	if opts.DebugGTE(rsyncopts.DEBUG_PROTO, 1) {
+		s.logger.Printf("(Server) Protocol versions: remote=%d, negotiated=%d", remoteProtocol, proto)
 	}
 
 	if err := c.WriteInt32(sessionChecksumSeed); err != nil {
@@ -441,7 +466,7 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 			}
 		}()
 
-		return s.handleConnSender(module, crd, cwr, paths, opts, false, c, sessionChecksumSeed, mpx)
+		return s.handleConnSender(module, crd, cwr, paths, opts, c, sessionChecksumSeed, mpx)
 	}
 
 	// If returning an error, send the error to the client for display, too:
@@ -450,11 +475,11 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 			mpx.WriteMsg(rsyncwire.MsgErrorXfer, fmt.Appendf(nil, "gokr-rsync [receiver]: %v\n", err))
 		}
 	}()
-	return s.handleConnReceiver(module, crd, cwr, paths, opts, false, c, sessionChecksumSeed, mpx)
+	return s.handleConnReceiver(module, crd, cwr, paths, opts, c, sessionChecksumSeed, mpx)
 }
 
 // handleConnReceiver is equivalent to rsync/main.c:do_server_recv
-func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, negotiate bool, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter) (err error) {
+func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter) (err error) {
 	var destPath string
 	implicitModule := module == nil
 	if implicitModule {
@@ -604,7 +629,7 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 }
 
 // handleConnSender is equivalent to rsync/main.c:do_server_sender
-func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, negotiate bool, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter) (err error) {
+func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter) (err error) {
 	if module == nil {
 		module = &Module{
 			Name: "implicit",

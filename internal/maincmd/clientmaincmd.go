@@ -141,18 +141,18 @@ func rsyncMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		}
 	}
 
-	negotiate := true
+	var remoteProtocol int32 // exchanged by ClientRun
 	if daemonConnection != 0 {
-		done, err := StartInbandExchange(ctx, osenv, opts, conn, path)
+		done, remote, err := StartInbandExchange(ctx, osenv, opts, conn, path)
 		if err != nil {
 			return nil, err
 		}
 		if done {
 			return nil, nil
 		}
-		negotiate = false // already done
+		remoteProtocol = remote
 	}
-	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, negotiate, ClientHooks{})
+	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, remoteProtocol, ClientHooks{})
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +302,11 @@ func clientTrace(osenv *rsyncos.Env, opts *rsyncopts.Options) *rsyncwire.Trace {
 }
 
 // rsync/main.c:client_run
-func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, paths []string, negotiate bool, hooks ClientHooks) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
+//
+// remoteProtocol is the protocol version the server announced in a daemon
+// greeting. When it is 0, both sides exchange versions on conn first, as over
+// a remote shell.
+func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, paths []string, remoteProtocol int32, hooks ClientHooks) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
 	conn, stop := rsyncwire.WrapCtx(ctx, conn)
 	defer stop()
 	trace := clientTrace(osenv, opts)
@@ -314,17 +318,26 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		Writer: cwr,
 	}
 
-	if negotiate {
-		if err := c.WriteInt32(rsync.ProtocolVersion); err != nil {
+	if err := rsyncwire.CheckProtocolOption("Client", opts.ProtocolVersion()); err != nil {
+		return nil, nil, err
+	}
+	if remoteProtocol == 0 {
+		if err := c.WriteInt32(opts.ProtocolVersion()); err != nil {
 			return nil, nil, err
 		}
-		remoteProtocol, err := c.ReadInt32()
+		var err error
+		remoteProtocol, err = c.ReadInt32()
 		if err != nil {
 			return nil, nil, err
 		}
-		if opts.Verbose() {
-			osenv.Logf("remote protocol: %d", remoteProtocol)
-		}
+	}
+	proto, err := rsyncwire.NegotiateProtocol("Client", opts.ProtocolVersion(), remoteProtocol)
+	if err != nil {
+		return nil, nil, err
+	}
+	c.Session.Protocol = proto
+	if opts.DebugGTE(rsyncopts.DEBUG_PROTO, 1) {
+		osenv.Logf("(Client) Protocol versions: remote=%d, negotiated=%d", remoteProtocol, proto)
 	}
 
 	seed, err := c.ReadInt32()

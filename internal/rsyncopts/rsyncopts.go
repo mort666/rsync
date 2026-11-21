@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/gokrazy/rsync/internal/rsyncos"
+	"github.com/gokrazy/rsync/internal/rsyncwire"
 	"github.com/gokrazy/rsync/internal/version"
 )
 
@@ -133,7 +134,7 @@ var tridgeDefaults = Options{
 	rsync_path:           "rsync",
 	default_af_hint:      syscall.AF_INET6,
 	blocking_io:          -1,
-	protocol_version:     27,
+	protocol_version:     rsyncwire.MaxProtocolVersion,
 }
 
 // NewOptions returns an Options struct with all options initialized to their
@@ -164,7 +165,7 @@ var gokrazyDefaults = Options{
 	rsync_path:           "rsync",
 	default_af_hint:      syscall.AF_INET6,
 	blocking_io:          -1,
-	protocol_version:     27,
+	protocol_version:     rsyncwire.MaxProtocolVersion,
 }
 
 // NewOptions returns an Options struct with all options initialized to their
@@ -776,10 +777,14 @@ func (o *Options) PasswordFile() string  { return o.password_file }
 func (o *Options) XferDirs() int         { return o.xfer_dirs }
 func (o *Options) FilterRules() []string { return o.filterRules }
 
+// ProtocolVersion is the protocol version this side announces:
+// rsyncwire.MaxProtocolVersion unless --protocol asked for another.
+func (o *Options) ProtocolVersion() int32 { return int32(o.protocol_version) }
+
 // ReceiverWantsFilterList mirrors rsync/exclude.c:send_filter_list: the sender
 // transmits its filter list (so the receiver can protect matched paths from
-// --delete) only when the receiver will read it. ProtocolVersion is always 27
-// (< 29) here, so --delete-excluded suppresses the exchange.
+// --delete) only when the receiver will read it. The protocol version is
+// always 27 (< 29) here, so --delete-excluded suppresses the exchange.
 func (o *Options) ReceiverWantsFilterList() bool {
 	return o.delete_mode != 0 && o.delete_excluded == 0
 }
@@ -1085,7 +1090,7 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"no-blocking-io", "", POPT_ARG_VAL, &o.blocking_io, 0},
 		//{"outbuf", "", POPT_ARG_STRING, &o.outbuf_mode, 0},
 		//{"remote-option", "M", POPT_ARG_STRING, nil, 'M'},
-		//{"protocol", "", POPT_ARG_INT, &o.protocol_version, 0},
+		{"protocol", "", POPT_ARG_INT, &o.protocol_version, 0},
 		//{"checksum-seed", "", POPT_ARG_INT, &o.checksum_seed, 0},
 		{"server", "", POPT_ARG_NONE, nil, OPT_SERVER},
 		{"sender", "", POPT_ARG_NONE, nil, OPT_SENDER},

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -841,5 +842,47 @@ func TestReceiverCommandDryRun(t *testing.T) {
 	t.Logf("%v", rsync.Args)
 	if err := rsync.Run(); err != nil {
 		t.Fatalf("rsync error, output:\n%s", buf.String())
+	}
+}
+
+// A gokrazy server takes --protocol from its own command line, here passed
+// by stock rsync's --remote-option (-M, rsync 3.1 and newer).
+func TestServerProtocolOption(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("stdin not supported on Windows")
+	}
+	bin := rsynctest.TridgeOrGTFO(t, "runs the stock rsync client")
+	if v := rsynctest.RsyncVersion(t); strings.HasPrefix(v, "2.") || strings.HasPrefix(v, "3.0.") {
+		t.Skipf("stock rsync %s has no --remote-option", v)
+	}
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "source")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "hello"), []byte("world"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(protocol string) (string, error) {
+		var stderr bytes.Buffer
+		rsync := exec.Command(bin, "--dry-run", "-e", `"`+exe+`"`, "-M--protocol="+protocol, "-a", "source/", "localhost:"+filepath.Join(tmp, "dest")+"/")
+		rsync.Dir = tmp
+		rsync.Stderr = &stderr
+		err := rsync.Run()
+		return stderr.String(), err
+	}
+	if out, err := run("27"); err != nil {
+		t.Fatalf("-M--protocol=27: %v, stderr:\n%s", err, out)
+	}
+	out, err := run("26")
+	if err == nil {
+		t.Fatalf("-M--protocol=26: rsync succeeded, want an error")
+	}
+	if want := "--protocol must be at least 27 on the Server"; !strings.Contains(out, want) {
+		t.Errorf("-M--protocol=26: stderr does not mention %q:\n%s", want, out)
 	}
 }

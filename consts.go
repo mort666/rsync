@@ -1,5 +1,7 @@
 package rsync
 
+import "github.com/gokrazy/rsync/internal/rsyncwire"
+
 // rsync.h
 const (
 	XMIT_TOP_DIR             = (1 << 0)
@@ -29,11 +31,12 @@ const (
 	S_IFSOCK = 0o0140000 // Socket
 )
 
-// ProtocolVersion defines the currently implemented rsync protocol
-// version. Protocol version 27 seems to be the safest bet for wide
-// compatibility: version 27 was introduced by rsync 2.6.0 (released 2004), and
-// is supported by openrsync and rsyn.
-const ProtocolVersion = 27
+// ProtocolVersion is the newest rsync protocol version this package speaks.
+//
+// Deprecated: the version is negotiated per connection, see
+// rsyncwire.Session. Code that needs the upper bound should use
+// rsyncwire.MaxProtocolVersion.
+const ProtocolVersion = rsyncwire.MaxProtocolVersion
 
 // rsync/rsync.h defines chunkSize as 32 * 1024, which we match.
 //
