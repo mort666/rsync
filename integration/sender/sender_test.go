@@ -852,7 +852,7 @@ func TestServerProtocolOption(t *testing.T) {
 		t.Skip("stdin not supported on Windows")
 	}
 	bin := rsynctest.TridgeOrGTFO(t, "runs the stock rsync client")
-	if v := rsynctest.RsyncVersion(t); strings.HasPrefix(v, "2.") || strings.HasPrefix(v, "3.0.") {
+	if v := rsynctest.RsyncVersion(t); !rsynctest.RsyncVersionAtLeast(t, "3.1.0") {
 		t.Skipf("stock rsync %s has no --remote-option", v)
 	}
 	tmp := t.TempDir()

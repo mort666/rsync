@@ -228,7 +228,7 @@ func TestAwkwardPushToStock(t *testing.T) {
 // "<f.st......" for one whose size and time changed. (Below 29 the sender
 // knows nothing but the index.)
 func TestItemizeFromGokrazyGenerator(t *testing.T) {
-	if v := rsynctest.RsyncVersion(t); strings.HasPrefix(v, "2.") {
+	if v := rsynctest.RsyncVersion(t); !rsynctest.RsyncVersionAtLeast(t, "3.0.0") {
 		t.Skipf("rsync %s prints item flags in an older format", v)
 	}
 	src := makeAwkwardTree(t)

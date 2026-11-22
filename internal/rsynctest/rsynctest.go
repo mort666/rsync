@@ -517,3 +517,48 @@ func (c *trackedConn) CloseWrite() error {
 	}
 	return nil
 }
+
+// RsyncVersionAtLeast reports whether the stock rsync is version want
+// ("3.2.7") or newer, comparing numbers, so that 4.0 counts as newer than
+// 3.x. A suffix such as "dev" or "pre1" is ignored: 4.0.0dev is 4.0.0.
+func RsyncVersionAtLeast(t *testing.T, want string) bool {
+	return versionAtLeast(RsyncVersion(t), want)
+}
+
+func versionAtLeast(have, want string) bool {
+	h, w := versionNumbers(have), versionNumbers(want)
+	for i := range max(len(h), len(w)) {
+		var a, b int
+		if i < len(h) {
+			a = h[i]
+		}
+		if i < len(w) {
+			b = w[i]
+		}
+		if a != b {
+			return a > b
+		}
+	}
+	return true
+}
+
+// versionNumbers is "3.2.7" as [3 2 7], stopping at the first part that
+// does not start with a digit and dropping what follows a part's digits.
+func versionNumbers(v string) []int {
+	var nums []int
+	for part := range strings.SplitSeq(v, ".") {
+		end := 0
+		for end < len(part) && part[end] >= '0' && part[end] <= '9' {
+			end++
+		}
+		if end == 0 {
+			break
+		}
+		n, _ := strconv.Atoi(part[:end])
+		nums = append(nums, n)
+		if end < len(part) {
+			break
+		}
+	}
+	return nums
+}

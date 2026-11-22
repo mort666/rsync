@@ -96,8 +96,7 @@ func wireBytes(t *testing.T, out, which string) int {
 // stockCompressors is what the stock rsync can use: its compress list,
 // or zlib alone before rsync 3.2.
 func stockCompressors(t *testing.T) []string {
-	v := rsynctest.RsyncVersion(t)
-	if strings.HasPrefix(v, "2.") || strings.HasPrefix(v, "3.0.") || strings.HasPrefix(v, "3.1.") {
+	if !rsynctest.RsyncVersionAtLeast(t, "3.2.0") {
 		return nil
 	}
 	out, _ := stock(t, "--version")

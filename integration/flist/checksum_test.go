@@ -66,7 +66,7 @@ func checkDelta(t *testing.T, dest string, data []byte) {
 }
 
 func stockHasChoices(t *testing.T) {
-	if v := rsynctest.RsyncVersion(t); strings.HasPrefix(v, "2.") || strings.HasPrefix(v, "3.0.") || strings.HasPrefix(v, "3.1.") {
+	if v := rsynctest.RsyncVersion(t); !rsynctest.RsyncVersionAtLeast(t, "3.2.0") {
 		t.Skipf("rsync %s has no --checksum-choice", v)
 	}
 }

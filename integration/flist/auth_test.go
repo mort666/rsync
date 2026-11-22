@@ -54,18 +54,10 @@ func stockEnv(t *testing.T, env []string, args ...string) (string, error) {
 	return buf.String(), err
 }
 
-func stockNegotiates() bool {
-	out, err := exec.Command("rsync", "--version").Output()
-	if err != nil {
-		return false
-	}
-	// rsync 3.2.7 and newer list auth digests in their greetings.
-	for _, old := range []string{"version 2.", "version 3.0.", "version 3.1.", "version 3.2.0", "version 3.2.1", "version 3.2.2", "version 3.2.3", "version 3.2.4", "version 3.2.5", "version 3.2.6"} {
-		if strings.Contains(string(out), old) {
-			return false
-		}
-	}
-	return true
+// stockNegotiates reports whether the stock rsync lists auth digests in
+// its greetings, as rsync 3.2.7 and newer do.
+func stockNegotiates(t *testing.T) bool {
+	return rsynctest.RsyncVersionAtLeast(t, "3.2.7")
 }
 
 func TestAuthToGokrazy(t *testing.T) {
@@ -74,7 +66,7 @@ func TestAuthToGokrazy(t *testing.T) {
 	protocols(t, func(t *testing.T, proto int) {
 		url := "rsync://alice@localhost:" + ts.Port + "/mod/"
 		args := []string{fmt.Sprintf("--protocol=%d", proto), "-r"}
-		if stockNegotiates() {
+		if stockNegotiates(t) {
 			args = append(args, "--debug=nstr")
 		}
 		dest := t.TempDir()
@@ -85,7 +77,7 @@ func TestAuthToGokrazy(t *testing.T) {
 		if got, err := os.ReadFile(filepath.Join(dest, "f")); err != nil || string(got) != "secret data" {
 			t.Errorf("f: %q, %v", got, err)
 		}
-		if stockNegotiates() && !strings.Contains(out, "negotiated daemon auth checksum: sha512") {
+		if stockNegotiates(t) && !strings.Contains(out, "negotiated daemon auth checksum: sha512") {
 			t.Errorf("stock rsync did not negotiate sha512")
 		}
 		if _, err := stockEnv(t, []string{"RSYNC_PASSWORD=wrong"}, append(args, url, t.TempDir()+"/")...); err == nil {
@@ -119,7 +111,7 @@ func TestAuthFromGokrazy(t *testing.T) {
 		// by the version both sides end up with, which run-tests.sh -p
 		// can force below proto.
 		want := regexp.MustCompile(`negotiated daemon auth checksum: md[45]\b`)
-		if stockNegotiates() {
+		if stockNegotiates(t) {
 			want = regexp.MustCompile(`negotiated daemon auth checksum: sha512`)
 		}
 		if !want.MatchString(out) {

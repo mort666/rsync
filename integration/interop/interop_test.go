@@ -330,7 +330,7 @@ func createSourceFiles(t *testing.T) (string, string, string) {
 }
 
 func sourcesArgs(t *testing.T) []string {
-	if strings.HasPrefix(rsynctest.RsyncVersion(t), "3.") {
+	if rsynctest.RsyncVersionAtLeast(t, "3.0.0") {
 		// rsync 3.0.0 (March 2008) introduced multiple source args.
 		return []string{
 			"rsync://localhost/interop/expensive/", // copy contents of interop
@@ -355,7 +355,7 @@ func sourceFullySyncedTo(t *testing.T, dest string) error {
 		}
 	}
 
-	if !strings.HasPrefix(rsynctest.RsyncVersion(t), "3.") {
+	if !rsynctest.RsyncVersionAtLeast(t, "3.0.0") {
 		return nil
 	}
 
@@ -663,7 +663,7 @@ func TestInteropRemoteCommand(t *testing.T) {
 	sourcesArgs := []string{
 		"localhost:" + source + "/expensive/", // copy contents of interop
 	}
-	if strings.HasPrefix(rsynctest.RsyncVersion(t), "3.") {
+	if rsynctest.RsyncVersionAtLeast(t, "3.0.0") {
 		sourcesArgs = append(sourcesArgs, ":"+source+"/cheap") // copy cheap directory
 	}
 

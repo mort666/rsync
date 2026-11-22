@@ -134,7 +134,7 @@ func TestDaemonArgsLikeStockRsync(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the tree has names Windows does not allow, such as a*b")
 	}
-	if v := rsynctest.RsyncVersion(t); strings.HasPrefix(v, "2.") {
+	if v := rsynctest.RsyncVersion(t); !rsynctest.RsyncVersionAtLeast(t, "3.0.0") {
 		// rsync 2.x expands daemon wildcards differently (for example "*"
 		// skips dotfiles and ".*" is an error). This test pins the 3.x
 		// behaviour, which every release from 3.0.9 on agrees with.
