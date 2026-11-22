@@ -495,6 +495,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			WholeFile:         opts.WholeFile(),
 
 			Inplace:     opts.Inplace(),
+			BlockSize:   opts.BlockSize(),
 			KeepPartial: opts.KeepPartial(),
 			PartialDir:  opts.PartialDir(),
 

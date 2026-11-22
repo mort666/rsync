@@ -355,7 +355,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		// Match rsync/generator.c: in --append mode, send only the sum head;
 		// the sender skips block-match verification and infers the prefix size
 		// from ChecksumCount * BlockLength + RemainderLength.
-		sh := rsynccommon.SumSizesSqroot(rt.Conn.Session.Protocol, st.Size(), rt.strong().Len())
+		sh := rsynccommon.SumSizesSqroot(rt.Conn.Session.Protocol, st.Size(), rt.strong().Len(), rt.Opts.BlockSize)
 		return sh.WriteTo(rt.Conn)
 	}
 
@@ -453,7 +453,7 @@ func (rt *Transfer) changedFlags(f *File, st os.FileInfo) uint32 {
 
 // rsync/generator.c:generate_and_send_sums
 func (rt *Transfer) generateAndSendSums(in *os.File, fileLen int64) error {
-	sh := rsynccommon.SumSizesSqroot(rt.Conn.Session.Protocol, fileLen, rt.strong().Len())
+	sh := rsynccommon.SumSizesSqroot(rt.Conn.Session.Protocol, fileLen, rt.strong().Len(), rt.Opts.BlockSize)
 	if err := sh.WriteTo(rt.Conn); err != nil {
 		return err
 	}

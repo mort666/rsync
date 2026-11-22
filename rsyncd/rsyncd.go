@@ -604,6 +604,7 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			WholeFile:      opts.WholeFile(),
 
 			Inplace:     opts.Inplace(),
+			BlockSize:   opts.BlockSize(),
 			KeepPartial: opts.KeepPartial(),
 			PartialDir:  opts.PartialDir(),
 

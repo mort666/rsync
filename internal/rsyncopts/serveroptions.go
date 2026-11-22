@@ -32,8 +32,8 @@ func (o *Options) ServerOptions() []string {
 
 	argstr := "-"
 
-	// TODO: support verbosity levels, i.e. one or more -v
-	if o.Verbose() {
+	// One v per level, up to nine.
+	for i := 0; i < o.verbose && i < 9; i++ {
 		argstr += "v"
 	}
 
@@ -147,11 +147,9 @@ func (o *Options) ServerOptions() []string {
 		sargv = append(sargv, "--fsync")
 	}
 
-	// if (block_size) {
-	// 	if (asprintf(&arg, "-B%u", block_size) < 0)
-	// 		goto oom;
-	// 	args[ac++] = arg;
-	// }
+	if o.block_size != 0 {
+		sargv = append(sargv, fmt.Sprintf("-B%d", o.block_size))
+	}
 
 	// if (max_delete && am_sender) {
 	// 	if (asprintf(&arg, "--max-delete=%d", max_delete) < 0)

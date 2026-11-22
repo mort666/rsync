@@ -306,52 +306,58 @@ type Options struct {
 	compress_choice      string
 	skip_compress        string
 	do_compression_level int
-	do_progress          int
-	keep_partial         int
-	partial_dir          string
-	delay_updates        int
-	prune_empty_dirs     int
-	logfile_name         string
-	logfile_format       string
-	stdout_format        string
-	itemize_changes      int
-	bwlimit_arg          string
-	bwlimit              int
-	make_backups         int
-	backup_dir           string
-	backup_suffix        string
-	list_only            int
-	batch_name           string
-	files_from           string
-	eol_nulls            int
-	old_style_args       int // intentionally set to 0; unsupported
-	protect_args         int // intentionally set to 0; currently unsupported
-	trust_sender         int
-	numeric_ids          int
-	io_timeout           int
-	connect_timeout      int
-	do_fsync             int
-	shell_cmd            string
-	rsync_path           string
-	tmpdir               string
-	iconv_opt            string
-	default_af_hint      int
-	allow_8bit_chars     int
-	mkpath_dest_arg      int
-	use_qsort            int
-	copy_as              string
-	bind_address         string // numeric IPv4 or IPv6, or a hostname
-	rsync_port           int
-	sockopts             string
-	password_file        string
-	early_input_file     string
-	blocking_io          int
-	outbuf_mode          string
-	protocol_version     int
-	checksum_seed        int
-	am_server            int
-	am_sender            int
-	am_daemon            int
+	// do_compression_threads is --compress-threads, which rsync passes to
+	// zstd as its worker count. It is accepted, but zstd here compresses
+	// on one thread.
+	do_compression_threads int
+	// block_size is --block-size, 0 for rsync's choice per file.
+	block_size       int32
+	do_progress      int
+	keep_partial     int
+	partial_dir      string
+	delay_updates    int
+	prune_empty_dirs int
+	logfile_name     string
+	logfile_format   string
+	stdout_format    string
+	itemize_changes  int
+	bwlimit_arg      string
+	bwlimit          int
+	make_backups     int
+	backup_dir       string
+	backup_suffix    string
+	list_only        int
+	batch_name       string
+	files_from       string
+	eol_nulls        int
+	old_style_args   int // intentionally set to 0; unsupported
+	protect_args     int // intentionally set to 0; currently unsupported
+	trust_sender     int
+	numeric_ids      int
+	io_timeout       int
+	connect_timeout  int
+	do_fsync         int
+	shell_cmd        string
+	rsync_path       string
+	tmpdir           string
+	iconv_opt        string
+	default_af_hint  int
+	allow_8bit_chars int
+	mkpath_dest_arg  int
+	use_qsort        int
+	copy_as          string
+	bind_address     string // numeric IPv4 or IPv6, or a hostname
+	rsync_port       int
+	sockopts         string
+	password_file    string
+	early_input_file string
+	blocking_io      int
+	outbuf_mode      string
+	protocol_version int
+	checksum_seed    int
+	am_server        int
+	am_sender        int
+	am_daemon        int
 
 	daemon_bwlimit int
 	config_file    string
@@ -814,6 +820,13 @@ func (o *Options) CompressLevel() int {
 	return max(o.do_compression_level, 0)
 }
 
+// BlockSize is --block-size, or 0 for rsync's choice per file.
+func (o *Options) BlockSize() int32 { return o.block_size }
+
+// CompressThreads is --compress-threads (never below 0). zstd here
+// compresses on one thread whatever it says.
+func (o *Options) CompressThreads() int { return max(o.do_compression_threads, 0) }
+
 // ProtocolVersion is the protocol version this side announces:
 // rsyncwire.MaxProtocolVersion unless --protocol asked for another.
 func (o *Options) ProtocolVersion() int32 { return int32(o.protocol_version) }
@@ -1034,7 +1047,7 @@ func (o *Options) gokrazyTable() []poptOption {
 		{"trust-sender", "", POPT_ARG_VAL, &o.trust_sender, 1},
 		{"checksum-choice", "", POPT_ARG_STRING, &o.checksum_choice, 0},
 		{"cc", "", POPT_ARG_STRING, &o.checksum_choice, 0},
-		//{"block-size", "B", POPT_ARG_STRING, nil, OPT_BLOCK_SIZE},
+		{"block-size", "B", POPT_ARG_STRING, nil, OPT_BLOCK_SIZE},
 		//{"compare-dest", "", POPT_ARG_STRING, nil, OPT_COMPARE_DEST},
 		//{"copy-dest", "", POPT_ARG_STRING, nil, OPT_COPY_DEST},
 		//{"link-dest", "", POPT_ARG_STRING, nil, OPT_LINK_DEST},
@@ -1052,6 +1065,8 @@ func (o *Options) gokrazyTable() []poptOption {
 		{"skip-compress", "", POPT_ARG_STRING, &o.skip_compress, 0},
 		{"compress-level", "", POPT_ARG_INT, &o.do_compression_level, 0},
 		{"zl", "", POPT_ARG_INT, &o.do_compression_level, 0},
+		{"compress-threads", "", POPT_ARG_INT, &o.do_compression_threads, 0},
+		{"zt", "", POPT_ARG_INT, &o.do_compression_threads, 0},
 
 		{"", "P", POPT_ARG_NONE, nil, 'P'},
 		{"progress", "", POPT_ARG_VAL, &o.do_progress, 1},
@@ -1313,6 +1328,8 @@ func (o *Options) tridgeTable() []poptOption {
 		{"skip-compress", "", POPT_ARG_STRING, &o.skip_compress, 0},
 		{"compress-level", "", POPT_ARG_INT, &o.do_compression_level, 0},
 		{"zl", "", POPT_ARG_INT, &o.do_compression_level, 0},
+		{"compress-threads", "", POPT_ARG_INT, &o.do_compression_threads, 0},
+		{"zt", "", POPT_ARG_INT, &o.do_compression_threads, 0},
 		{"", "P", POPT_ARG_NONE, nil, 'P'},
 		{"progress", "", POPT_ARG_VAL, &o.do_progress, 1},
 		{"no-progress", "", POPT_ARG_VAL, &o.do_progress, 0},
@@ -1585,7 +1602,17 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 			return errNotYetImplemented
 
 		case OPT_BLOCK_SIZE:
-			return errNotYetImplemented
+			// rsync checks against the protocol as far as it knows it
+			// here, so --protocol=29 before -B allows larger blocks.
+			maxBlockLen := int64(1 << 17) // MAX_BLOCK_SIZE
+			if opts.protocol_version < 30 {
+				maxBlockLen = 1 << 29 // OLD_MAX_BLOCK_SIZE
+			}
+			size, err := parseSizeArg(pc.poptGetOptArg(), 'b', "block-size", 0, maxBlockLen, false)
+			if err != nil {
+				return err
+			}
+			opts.block_size = int32(size)
 
 		case OPT_MAX_SIZE, // (needs parse_size_arg)
 			OPT_MIN_SIZE,

@@ -34,6 +34,10 @@ type TransferOpts struct {
 	AlwaysChecksum    bool
 	WholeFile         bool
 
+	// BlockSize is --block-size: the delta block length for every file,
+	// or 0 for rsync's choice per file (sum_sizes_sqroot).
+	BlockSize int32
+
 	// OmitDirTimes leaves the times of folders alone (--omit-dir-times),
 	// with PreserveTimes too.
 	OmitDirTimes bool

@@ -27,9 +27,13 @@ func MaxBlockLength(proto int32) int32 {
 // of 8, at most MaxBlockLength(proto). The strong sums are sent in full,
 // up to 16 bytes: sumLen, the length of the session's strong checksum, may
 // be shorter (8 for xxh64), and rsync refuses a sum head asking for more.
-func SumSizesSqroot(proto int32, contentLen int64, sumLen int) rsync.SumHead {
+// fixedBlockLen is --block-size: when above 0 it is the block length for
+// every file.
+func SumSizesSqroot(proto int32, contentLen int64, sumLen int, fixedBlockLen int32) rsync.SumHead {
 	var blockLength int32
-	if contentLen <= blockSize*blockSize {
+	if fixedBlockLen > 0 {
+		blockLength = fixedBlockLen // --block-size
+	} else if contentLen <= blockSize*blockSize {
 		blockLength = blockSize
 	} else {
 		maxBlength := MaxBlockLength(proto)

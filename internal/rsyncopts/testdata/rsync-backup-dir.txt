@@ -165,6 +165,8 @@ long=zc short= arg="(null)"
 long=skip-compress short= arg="(null)"
 long=compress-level short= arg=-2147483648
 long=zl short= arg=-2147483648
+long=compress-threads short= arg=0
+long=zt short= arg=0
 long=(null) short=P arg=<nil int>
 long=progress short= arg=0
 long=no-progress short= arg=0

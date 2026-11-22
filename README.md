@@ -202,7 +202,7 @@ negotiate a faster checksum (xxh128).
 * xattrs (including acls), which rsync protocol 30 introduced, are not supported.
 * Incremental recursion (the `i` capability letter) is not supported, so
   large trees send their whole file list up front.
-* `--compress-threads` is not accepted: zstd compresses on one thread.
+* `--compress-threads` is accepted, but zstd compresses on one thread.
 
 ## Supported environments and privilege dropping
 
