@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -743,12 +744,30 @@ func (o *Options) OmitDirTimes() bool      { return o.omit_dir_times > 0 }
 func (o *Options) PreservePerms() bool     { return o.preserve_perms != 0 }
 func (o *Options) PreserveSpecials() bool  { return o.preserve_specials != 0 }
 func (o *Options) PreserveHardLinks() bool { return o.preserve_hard_links != 0 }
-func (o *Options) DoFsync() bool           { return o.do_fsync != 0 }
-func (o *Options) Recurse() bool           { return o.recurse != 0 }
-func (o *Options) Verbose() bool           { return o.verbose != 0 }
-func (o *Options) DeleteMode() bool        { return o.delete_mode != 0 }
-func (o *Options) Sender() bool            { return o.am_sender != 0 }
-func (o *Options) SetSender()              { o.am_sender = 1 }
+
+// Symlink options (rsync's copy_links, copy_dirlinks, copy_unsafe_links,
+// keep_dirlinks, safe_symlinks, munge_symlinks).
+func (o *Options) CopyLinks() bool       { return o.copy_links != 0 }
+func (o *Options) CopyDirlinks() bool    { return o.copy_dirlinks != 0 }
+func (o *Options) CopyUnsafeLinks() bool { return o.copy_unsafe_links != 0 }
+func (o *Options) KeepDirlinks() bool    { return o.keep_dirlinks != 0 }
+func (o *Options) SafeLinks() bool       { return o.safe_symlinks != 0 }
+func (o *Options) MungeLinks() bool      { return o.munge_symlinks != 0 }
+
+// SetMungeLinks turns --munge-links on or off: a daemon module's munge
+// symlinks setting, which the client cannot change.
+func (o *Options) SetMungeLinks(on bool) {
+	o.munge_symlinks = 0
+	if on {
+		o.munge_symlinks = 1
+	}
+}
+func (o *Options) DoFsync() bool    { return o.do_fsync != 0 }
+func (o *Options) Recurse() bool    { return o.recurse != 0 }
+func (o *Options) Verbose() bool    { return o.verbose != 0 }
+func (o *Options) DeleteMode() bool { return o.delete_mode != 0 }
+func (o *Options) Sender() bool     { return o.am_sender != 0 }
+func (o *Options) SetSender()       { o.am_sender = 1 }
 func (o *Options) SetListOnly() {
 	o.list_only = 1
 	if o.recurse == 0 {
@@ -1014,13 +1033,13 @@ func (o *Options) gokrazyTable() []poptOption {
 		{"links", "l", POPT_ARG_VAL, &o.preserve_links, 1},
 		{"no-links", "", POPT_ARG_VAL, &o.preserve_links, 0},
 		{"no-l", "", POPT_ARG_VAL, &o.preserve_links, 0},
-		//{"copy-links", "L", POPT_ARG_NONE, &o.copy_links, 0},
-		//{"copy-unsafe-links", "", POPT_ARG_NONE, &o.copy_unsafe_links, 0},
-		//{"safe-links", "", POPT_ARG_NONE, &o.safe_symlinks, 0},
-		//{"munge-links", "", POPT_ARG_VAL, &o.munge_symlinks, 1},
-		//{"no-munge-links", "", POPT_ARG_VAL, &o.munge_symlinks, 0},
-		//{"copy-dirlinks", "k", POPT_ARG_NONE, &o.copy_dirlinks, 0},
-		//{"keep-dirlinks", "K", POPT_ARG_NONE, &o.keep_dirlinks, 0},
+		{"copy-links", "L", POPT_ARG_NONE, &o.copy_links, 0},
+		{"copy-unsafe-links", "", POPT_ARG_NONE, &o.copy_unsafe_links, 0},
+		{"safe-links", "", POPT_ARG_NONE, &o.safe_symlinks, 0},
+		{"munge-links", "", POPT_ARG_VAL, &o.munge_symlinks, 1},
+		{"no-munge-links", "", POPT_ARG_VAL, &o.munge_symlinks, 0},
+		{"copy-dirlinks", "k", POPT_ARG_NONE, &o.copy_dirlinks, 0},
+		{"keep-dirlinks", "K", POPT_ARG_NONE, &o.keep_dirlinks, 0},
 		{"hard-links", "H", POPT_ARG_NONE, nil, 'H'},
 		{"no-hard-links", "", POPT_ARG_VAL, &o.preserve_hard_links, 0},
 		{"no-H", "", POPT_ARG_VAL, &o.preserve_hard_links, 0},
@@ -1805,6 +1824,14 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 		return fmt.Errorf("--fake-super requires an rsync with extended attributes enabled")
 	}
 
+	// rsync/options.c: a munged link points into /rsyncd-munged/, which
+	// must not lead anywhere.
+	if opts.munge_symlinks != 0 && opts.am_daemon == 0 {
+		if fi, err := os.Stat(strings.TrimSuffix(SymlinkPrefix, "/")); err == nil && fi.IsDir() {
+			return fmt.Errorf("symlink munging is unsafe when a %s directory exists", strings.TrimSuffix(SymlinkPrefix, "/"))
+		}
+	}
+
 	if opts.do_progress != 0 && opts.am_server == 0 {
 		if opts.info[INFO_NAME] == 0 {
 			opts.info[INFO_NAME] = 1
@@ -1819,3 +1846,7 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 
 	return nil
 }
+
+// SymlinkPrefix is what --munge-links puts before a received symlink's
+// target, so that it leads nowhere (rsync.h SYMLINK_PREFIX).
+const SymlinkPrefix = "/rsyncd-munged/"

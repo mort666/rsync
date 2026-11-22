@@ -44,6 +44,12 @@ type Transfer struct {
 	Progress progress.Printer
 	Source   FileSource // for modules specifying a fs.FS
 
+	// Confined keeps -L, -k and --copy-unsafe-links inside the source
+	// folder, as a daemon's module, where a link out of it fails as it
+	// does for a chrooted rsync daemon. Otherwise a link is followed
+	// wherever it leads, as rsync does.
+	Confined bool
+
 	// TellClient, when set, sends the client a message with tag, as an rsync
 	// server tells it about a file it leaves out (rsync/sender.c
 	// send_files); the client counts the message as an error. Servers set

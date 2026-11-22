@@ -49,8 +49,20 @@ func (o *Options) ServerOptions() []string {
 	if o.PreserveLinks() {
 		argstr += "l"
 	}
-	// if (copy_links)
-	// 	argstr[x++] = 'L';
+	// A sending client keeps its own -L and -k and the far end keeps the
+	// folder links it has; a receiving one asks the sender to follow.
+	if o.Sender() {
+		if o.KeepDirlinks() {
+			argstr += "K"
+		}
+	} else {
+		if o.CopyLinks() {
+			argstr += "L"
+		}
+		if o.CopyDirlinks() {
+			argstr += "k"
+		}
+	}
 
 	if o.whole_file > 0 && o.append_mode == 0 {
 		argstr += "W"
@@ -237,11 +249,12 @@ func (o *Options) ServerOptions() []string {
 	// if (ignore_errors)
 	// 	args[ac++] = "--ignore-errors";
 
-	// if (copy_unsafe_links)
-	// 	args[ac++] = "--copy-unsafe-links";
-
-	// if (safe_symlinks)
-	// 	args[ac++] = "--safe-links";
+	if o.CopyUnsafeLinks() {
+		sargv = append(sargv, "--copy-unsafe-links")
+	}
+	if o.SafeLinks() {
+		sargv = append(sargv, "--safe-links")
+	}
 
 	// if (numeric_ids)
 	// 	args[ac++] = "--numeric-ids";

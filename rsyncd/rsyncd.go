@@ -723,6 +723,9 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 
 // handleConnSender is equivalent to rsync/main.c:do_server_sender
 func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter, env *rsyncos.Env) (err error) {
+	// A daemon module keeps followed links inside it; a server over a
+	// remote shell has no module and follows them anywhere, as rsync does.
+	confined := module != nil
 	if module == nil {
 		module = &Module{
 			Name: "implicit",
@@ -749,6 +752,7 @@ func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader,
 	if module.FS != nil {
 		st.Source = sender.NewFSSource(module.FS)
 	}
+	st.Confined = confined
 
 	exclusionList, err := sender.RecvFilterList(st.Conn)
 	if err != nil {

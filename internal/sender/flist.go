@@ -102,6 +102,13 @@ type scopedWalker struct {
 	subdir    string
 	prefix    string
 	only      *onlySet // nil: everything goes
+
+	// For walking a folder a followed link leads to (links.go): the
+	// walker that followed it, how many such walks nest, and the entry
+	// walkFn is on.
+	parent    *scopedWalker
+	linkDepth int
+	current   string
 }
 
 func (s *scopedWalker) walk() error {
@@ -163,15 +170,43 @@ func (s *scopedWalker) walk() error {
 	return nil
 }
 
+// wireName is how the entry at path is named in the file list.
+func (s *scopedWalker) wireName(path string) string {
+	name := path
+	if s.strip != "" {
+		if path+"/" == s.strip {
+			// Transmit the top directory as ., like tridge rsync.
+			name = "."
+		} else {
+			name = strings.TrimPrefix(name, s.strip)
+		}
+	}
+	if s.prefix != "" {
+		if path == "." {
+			name = s.prefix
+		} else {
+			name = s.prefix + "/" + path
+		}
+	}
+	return name
+}
+
 func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	logger := s.st.Logger // for convenience
 	opts := s.st.Opts     // for convenience
 	if opts.DebugGTE(rsyncopts.DEBUG_FLIST, 1) {
 		logger.Printf("filepath.WalkFn(path=%s)", path)
 	}
+	s.current = path
 	var info fs.FileInfo
 	if err == nil {
 		info, err = d.Info()
+	}
+	if err == nil && info.Mode()&fs.ModeSymlink != 0 && (opts.CopyLinks() || opts.CopyDirlinks() || opts.CopyUnsafeLinks()) {
+		info, err = s.followLink(path, s.wireName(path), info)
+		if err == nil && info == nil {
+			return nil // walked as a folder, or left out
+		}
 	}
 	fakeLink := false // a symlink kept as a regular file by --fake-super
 	if err == nil && opts.FakeSuper() {
@@ -194,22 +229,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	// Only ever transmit long names, like openrsync
 	flags := byte(rsync.XMIT_LONG_NAME)
 
-	name := path
-	if s.strip != "" {
-		if path+"/" == s.strip {
-			// Transmit the top directory as ., like tridge rsync.
-			name = "."
-		} else {
-			name = strings.TrimPrefix(name, s.strip)
-		}
-	}
-	if s.prefix != "" {
-		if path == "." {
-			name = s.prefix
-		} else {
-			name = s.prefix + "/" + path
-		}
-	}
+	name := s.wireName(path)
 	if opts.DebugGTE(rsyncopts.DEBUG_FLIST, 1) {
 		logger.Printf("Trim(path=%q) = %q", path, name)
 	}
@@ -484,6 +504,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err // TODO
 		}
+		target = mungedTarget(opts, target)
 		s.fec.WriteVarint30(proto, int32(len(target)))
 		s.fec.WriteString(target)
 	}

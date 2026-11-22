@@ -96,7 +96,7 @@ func rsyncMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		// source is local
 		// other = src
 		paths = sources
-		roDirs = sources
+		roDirs = linkReadDirs(opts, sources)
 		if opts.LocalServer() {
 			// source and dest are both local
 			rwDirs = []string{dest}
@@ -597,4 +597,14 @@ func clientMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options
 	dest := remaining[len(remaining)-1]
 	sources := remaining[:len(remaining)-1]
 	return rsyncMain(ctx, osenv, opts, sources, dest)
+}
+
+// linkReadDirs is what a sender may read: its sources, or with -L, -k or
+// --copy-unsafe-links anything, as the links it follows may lead anywhere
+// (rsync has no such limit). Writing stays limited either way.
+func linkReadDirs(opts *rsyncopts.Options, sources []string) []string {
+	if opts.CopyLinks() || opts.CopyDirlinks() || opts.CopyUnsafeLinks() {
+		return []string{"/"}
+	}
+	return sources
 }
