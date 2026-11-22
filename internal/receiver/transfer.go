@@ -83,6 +83,10 @@ type Transfer struct {
 	// client-supplied filter list. Consulted only when DeleteMode is on.
 	Excluded func(name string) bool
 
+	// Implied, when set, is what a receiving client asked for: a name
+	// outside of it fails the file list (rsync 3.4, CVE-2022-29154).
+	Implied *ImpliedNames
+
 	// TellClient, when set, sends the client a message with tag, as an rsync
 	// server tells it about a file it could not delete (rsync/delete.c
 	// delete_item); the client counts the message as an error. Servers set

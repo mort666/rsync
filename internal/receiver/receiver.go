@@ -146,7 +146,7 @@ func (rt *Transfer) openLocalFile(f *File) (*os.File, error) {
 func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) error {
 	rt.Progress.Reset(uint64(f.Length))
 	var sh rsync.SumHead
-	if err := sh.ReadFrom(rt.Conn); err != nil {
+	if err := sh.ReadFromMax(rt.Conn, rt.strong().Len()); err != nil {
 		return err
 	}
 

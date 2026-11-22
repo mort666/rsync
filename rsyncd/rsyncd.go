@@ -222,6 +222,8 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	})
 	defer stop()
 
+	conn.handshakeDeadline(true)
+
 	const terminationCommand = "@RSYNCD: OK\n"
 	trace := s.traceConn(conn, 0)
 	cwr := conn.cwr
@@ -315,6 +317,7 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 		}
 		flags = append(flags, flag)
 	}
+	conn.handshakeDeadline(false)
 
 	s.logger.Printf("flags: %+v", flags)
 	osenv := &rsyncos.Env{Stderr: s.stderr}
@@ -384,6 +387,27 @@ type Conn struct {
 	rd     *bufio.Reader
 	closer io.Closer
 	traced bool // crd and cwr log raw bytes
+
+	// deadliner, when set, bounds the handshake (handshakeTimeout).
+	deadliner interface{ SetDeadline(time.Time) error }
+}
+
+// handshakeTimeout bounds the daemon handshake, from the greeting to the
+// last argument, as rsync 3.5 does (DAEMON_HANDSHAKE_TIMEOUT,
+// CVE-2026-70464): a client that stalls in it would otherwise hold its
+// connection open forever.
+var handshakeTimeout = 60 * time.Second
+
+// handshakeDeadline starts (on) or ends the handshake's deadline.
+func (c *Conn) handshakeDeadline(on bool) {
+	if c.deadliner == nil {
+		return
+	}
+	var t time.Time
+	if on {
+		t = time.Now().Add(handshakeTimeout)
+	}
+	c.deadliner.SetDeadline(t)
 }
 
 func NewConnection(r io.ReadCloser, w io.WriteCloser, name string) *Conn {
@@ -757,6 +781,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		go func() {
 			defer conn.Close()
 			c := NewConnection(conn, conn, remoteAddr.String())
+			c.deadliner = conn
 			if err := s.HandleDaemonConn(ctx, c); err != nil {
 				s.logger.Printf("[%s] handle: %v", remoteAddr, err)
 				// Perform a “lingering close” [1] to work around

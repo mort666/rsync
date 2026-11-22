@@ -46,9 +46,9 @@ This rsync implementation is not as well-tested as the original “tridge”
 implementation from the Samba project. gokrazy/rsync was started in 2021 and
 doesn’t have many users yet.
 
-With that warning out of the way, the rsync protocol uses MD4 checksums over
-file contents, so at least your file contents should never be able to be
-corrupted.
+With that warning out of the way, the rsync protocol checksums file contents
+(MD4 or MD5 with older peers, xxHash with rsync 3.2 and newer), so at least your
+file contents should never be able to be corrupted.
 
 There is enough other functionality (delta transfers, file metadata, special
 files like symlinks or devices, directory structures, etc.) in the rsync
@@ -63,7 +63,7 @@ any issues you run into!
 |----------|-------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|--------------|
 | C        | [RsyncProject/rsync](https://github.com/RsyncProject/rsync) (formerly WayneD/rsync) | original “tridge” implementation; I found [older versions](https://github.com/WayneD/rsync/tree/v2.6.1pre2) easier to study           | [32](https://github.com/RsyncProject/rsync/blob/v3.4.1/rsync.h#L114)                                                | ✔ yes        |
 | C        | [kristapsdz/openrsync](https://github.com/kristapsdz/openrsync)                     | OpenBSD, good docs                                                                                                                    | [27](https://github.com/kristapsdz/openrsync/blob/e54d57f7572381da2b549d39c7968fc79dac8e1d/extern.h#L30)            | ✔ yes        |
-| **Go**   | [gokrazy/rsync](https://github.com/gokrazy/rsync)                                   | → you are here ←                                                                                                                      | [27](https://github.com/gokrazy/rsync/blob/b3b58770b864613551036a2ef2827b74ace77749/internal/rsyncd/rsyncd.go#L317) | ✔ yes 🎉     |
+| **Go**   | [gokrazy/rsync](https://github.com/gokrazy/rsync)                                   | → you are here ←                                                                                                                      | [32](internal/rsyncwire/session.go)                                                                                 | ✔ yes 🎉     |
 | **Go**   | [jbreiding/rsync-go](https://github.com/jbreiding/rsync-go)                         | rsync algorithm                                                                                                                       |                                                                                                                     | ❌ no        |
 | **Go**   | [kaiakz/rsync-os](https://github.com/kaiakz/rsync-os)                               | only client/receiver                                                                                                                  | [27](https://github.com/kaiakz/rsync-os/blob/64e84daeabb1fa4d2c7cf766c196306adfba6cb2/rsync/const.go#L4)            | ❌ no        |
 | **Go**   | [knight42](https://gist.github.com/knight42/6ad35ce6fbf96519259b43a8c3f37478)       | proxy                                                                                                                                 |                                                                                                                     | ❌ no        |
@@ -192,16 +192,18 @@ Example:
 
 ### Bandwidth
 
-In my tests, `gokr-rsync` can easily transfer data at > 6 Gbit/s. The current
-bottleneck is the MD4 algorithm itself (not sure whether in the “tridge” rsync
-client, or in `gokr-rsync`). Implementing support for more recent protocol
-versions would help here, as these include hash algorithm negotiation with more
-recent choices.
+In my tests, `gokr-rsync` can easily transfer data at > 6 Gbit/s. With older
+peers the bottleneck is the MD4 algorithm itself (not sure whether in the
+“tridge” rsync client, or in `gokr-rsync`). With rsync 3.2 and newer, both sides
+negotiate a faster checksum (xxh128).
 
 ### Protocol related limitations
 
-* xattrs (including acls) was introduced in rsync protocol 30, so is currently
-  not supported.
+* xattrs (including acls), which rsync protocol 30 introduced, are not supported.
+* Incremental recursion (the `i` capability letter) is not supported, so
+  large trees send their whole file list up front.
+* zstd-compressed data (`--zc=zstd`) can be sent but not received; `-z`
+  negotiates lz4 instead when gokrazy/rsync receives.
 
 ## Supported environments and privilege dropping
 

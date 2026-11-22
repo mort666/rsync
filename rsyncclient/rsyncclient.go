@@ -216,13 +216,19 @@ func (c *Client) Run(ctx context.Context, conn io.ReadWriteCloser, paths []strin
 		// so assume the peer speaks the one we would announce.
 		remoteProtocol = c.opts.ProtocolVersion()
 	}
-	return c.run(ctx, conn, paths, remoteProtocol)
+	return c.run(ctx, conn, paths, remoteProtocol, "")
 }
 
-func (c *Client) run(ctx context.Context, conn io.ReadWriteCloser, paths []string, remoteProtocol int32) (*Result, error) {
+// run is one run. remotePath, when not empty, is the daemon path a
+// receiving client asked for: a file-list name outside of it fails the run.
+func (c *Client) run(ctx context.Context, conn io.ReadWriteCloser, paths []string, remoteProtocol int32, remotePath string) (*Result, error) {
 	c.osenv.XferErrors.Store(0)
 	c.osenv.IOErrors.Store(0)
-	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, remoteProtocol, maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend, SendOnly: c.sendOnly, OnSend: c.onSend})
+	hooks := maincmd.ClientHooks{OnFile: c.onFile, UnverifiedAppend: c.unverifiedAppend, SendOnly: c.sendOnly, OnSend: c.onSend}
+	if remotePath != "" {
+		hooks.RemotePaths, hooks.DaemonModule = []string{remotePath}, true
+	}
+	stats, fileList, err := maincmd.ClientRun(ctx, c.osenv, c.opts, conn, paths, remoteProtocol, hooks)
 	if err != nil {
 		return nil, err
 	}
@@ -247,5 +253,5 @@ func (c *Client) RunDaemon(ctx context.Context, conn io.ReadWriteCloser, remoteP
 	if done { // Server sent EXIT
 		return &Result{Stats: &rsyncstats.TransferStats{}}, nil
 	}
-	return c.run(ctx, conn, paths, remoteProtocol)
+	return c.run(ctx, conn, paths, remoteProtocol, remotePath)
 }

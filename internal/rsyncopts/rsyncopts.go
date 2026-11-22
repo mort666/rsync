@@ -780,6 +780,10 @@ func (o *Options) FilterRules() []string { return o.filterRules }
 // ChecksumChoice is --checksum-choice: "xfer" or "xfer,file", or "".
 func (o *Options) ChecksumChoice() string { return o.checksum_choice }
 
+// TrustSender is --trust-sender: a receiving client accepts file-list
+// names it did not ask for.
+func (o *Options) TrustSender() bool { return o.trust_sender != 0 }
+
 // CompressChoice is the compressor the options ask for, settled as
 // options.c does before negotiation: "" for none, "auto" to negotiate
 // (-z, or --compress-level alone), or a name (--compress-choice, which
@@ -1027,6 +1031,7 @@ func (o *Options) gokrazyTable() []poptOption {
 		{"checksum", "c", POPT_ARG_VAL, &o.always_checksum, 1},
 		{"no-checksum", "", POPT_ARG_VAL, &o.always_checksum, 0},
 		{"no-c", "", POPT_ARG_VAL, &o.always_checksum, 0},
+		{"trust-sender", "", POPT_ARG_VAL, &o.trust_sender, 1},
 		{"checksum-choice", "", POPT_ARG_STRING, &o.checksum_choice, 0},
 		{"cc", "", POPT_ARG_STRING, &o.checksum_choice, 0},
 		//{"block-size", "B", POPT_ARG_STRING, nil, OPT_BLOCK_SIZE},
@@ -1089,7 +1094,6 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"protect-args", "", POPT_ARG_VAL, &o.protect_args, 1},
 		//{"no-protect-args", "", POPT_ARG_VAL, &o.protect_args, 0},
 		//{"no-s", "", POPT_ARG_VAL, &o.protect_args, 0},
-		//{"trust-sender", "", POPT_ARG_VAL, &o.trust_sender, 1},
 		//{"numeric-ids", "", POPT_ARG_VAL, &o.numeric_ids, 1},
 		//{"no-numeric-ids", "", POPT_ARG_VAL, &o.numeric_ids, 0},
 		//{"usermap", "", POPT_ARG_STRING, nil, OPT_USERMAP},

@@ -194,7 +194,7 @@ func (st *Transfer) receiveSums() (rsync.SumHead, error) {
 // reverts to full sums even when --append is in effect.
 func (st *Transfer) receiveSumsForPhase(appendShortcut bool) (rsync.SumHead, error) {
 	var head rsync.SumHead
-	if err := head.ReadFrom(st.Conn); err != nil {
+	if err := head.ReadFromMax(st.Conn, st.strong().Len()); err != nil {
 		return head, err
 	}
 	if appendShortcut {

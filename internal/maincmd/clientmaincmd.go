@@ -154,7 +154,9 @@ func rsyncMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		}
 		remoteProtocol = remote
 	}
-	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, remoteProtocol, ClientHooks{})
+	// A daemon over a remote shell names the module first.
+	hooks := ClientHooks{RemotePaths: []string{path}, DaemonModule: daemonConnection > 0}
+	stats, _, err := ClientRun(ctx, osenv, opts, conn, paths, remoteProtocol, hooks)
 	if err != nil {
 		return nil, err
 	}
@@ -295,6 +297,14 @@ type ClientHooks struct {
 	UnverifiedAppend bool
 	SendOnly         []string
 	OnSend           func(name string)
+
+	// RemotePaths are the source paths a receiving client asked the server
+	// for, as it sent them, each led by the module (DaemonModule) for a
+	// daemon. A file list name outside of them fails the run, as in rsync
+	// 3.4 (receiver.ImpliedNames), unless --trust-sender. Without them,
+	// any name is accepted.
+	RemotePaths  []string
+	DaemonModule bool
 }
 
 // clientTrace returns the --debug=io trace for the client side of a
@@ -454,8 +464,13 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		return nil, nil, fmt.Errorf("BUG: expected exactly one path, got %q", paths)
 	}
 
+	var implied *receiver.ImpliedNames
+	if len(hooks.RemotePaths) > 0 && !opts.TrustSender() {
+		implied = receiver.NewImpliedNames(hooks.RemotePaths, hooks.DaemonModule)
+	}
 	rt := &receiver.Transfer{
-		Logger: osenv.Logger(),
+		Implied: implied,
+		Logger:  osenv.Logger(),
 		Opts: &receiver.TransferOpts{
 			Verbose:  opts.Verbose(),
 			DryRun:   opts.DryRun(),

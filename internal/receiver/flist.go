@@ -118,8 +118,13 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	if _, err := io.ReadFull(rt.Conn.Reader, readb); err != nil {
 		return nil, err
 	}
-	// TODO: does rsync’s clean_fname() and sanitize_path() combination do
-	// anything more than Go’s filepath.Clean()?
+	// rsync 3.4 aborts on a name that could leave the destination, and on
+	// one the client did not ask for (flist.c:recv_file_entry).
+	if name := string(b); name != "" && unsafeName(name) {
+		return nil, fmt.Errorf("ABORTING due to unsafe pathname from sender: %s", name)
+	} else if name != "" && !rt.Implied.Allows(name) {
+		return nil, fmt.Errorf("ERROR: rejecting unrequested file-list name: %s", name)
+	}
 	f.Name = filepath.Clean(string(b))
 
 	if proto >= 30 && rt.Opts.PreserveHardlinks && flags&rsync.XMIT_HLINKED != 0 {
@@ -133,6 +138,9 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	length, err := rt.Conn.ReadVarlong30(3)
 	if err != nil {
 		return nil, err
+	}
+	if length < 0 {
+		return nil, fmt.Errorf("offset underflow: the length of %s is negative", f.Name)
 	}
 	f.Length = length
 
@@ -302,6 +310,16 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 		}
 	}
 
+	switch f.Mode & rsync.S_IFMT {
+	case rsync.S_IFREG, rsync.S_IFDIR, rsync.S_IFLNK, rsync.S_IFCHR, rsync.S_IFBLK, rsync.S_IFIFO, rsync.S_IFSOCK:
+	default:
+		return nil, fmt.Errorf("invalid file mode 0%o for %s", f.Mode, f.Name)
+	}
+	// "." is the transfer root: as anything but a folder it could replace
+	// the destination folder.
+	if f.Name == "." && f.Mode&rsync.S_IFMT != rsync.S_IFDIR {
+		return nil, fmt.Errorf("ERROR: rejecting non-directory transfer-root entry: %s", f.Name)
+	}
 	return f, nil
 }
 

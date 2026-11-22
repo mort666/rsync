@@ -35,7 +35,16 @@ type SumHead struct {
 	Sums []SumBuf
 }
 
+// ReadFrom is ReadFromMax with the longest strong checksum, 16 bytes.
 func (sh *SumHead) ReadFrom(c *rsyncwire.Conn) error {
+	return sh.ReadFromMax(c, 16)
+}
+
+// ReadFromMax is io.c:read_sum_head: a sum head, checked as rsync 3.4
+// checks it. maxSumLen is the session's strong checksum length
+// (xfer_sum_len), which the per-block checksum length may not exceed: 8
+// for xxh64 and xxh3, 16 for the others.
+func (sh *SumHead) ReadFromMax(c *rsyncwire.Conn, maxSumLen int) error {
 	// io.c:read_sum_head: MAX_BLOCK_SIZE from protocol 30,
 	// OLD_MAX_BLOCK_SIZE before.
 	maxBlockLen := int32(1 << 29)
@@ -76,8 +85,7 @@ func (sh *SumHead) ReadFrom(c *rsyncwire.Conn) error {
 	if err != nil {
 		return err
 	}
-	// At most the strong checksum's length, 16 for MD4 and MD5.
-	if sh.ChecksumLength < 0 || sh.ChecksumLength > 16 {
+	if sh.ChecksumLength < 0 || int(sh.ChecksumLength) > maxSumLen {
 		return fmt.Errorf("invalid checksum length %d", sh.ChecksumLength)
 	}
 
