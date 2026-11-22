@@ -25,7 +25,7 @@ Builds go to `~/.cache/gokrazy-rsync-matrix/<name>/bin/rsync` (override with `RS
 What the builds need:
 
 - A C compiler, `make`, `curl`, `git`.
-- Headers for libacl, popt, OpenSSL, xxhash, zstd, lz4 and zlib, so the 3.2+ builds offer the same checksum and compression lists as distribution packages. On Arch these come with the normal packages. On Debian or Ubuntu install `libacl1-dev libpopt-dev libssl-dev libxxhash-dev libzstd-dev liblz4-dev zlib1g-dev`.
+- Headers for libacl, popt, OpenSSL, xxhash, zstd, lz4 and zlib, so the 3.2+ builds offer the same checksum and compression lists as distribution packages, and libidn2, without which rsync 3.5 refuses to configure. On Arch these come with the normal packages. On Debian or Ubuntu install `libacl1-dev libpopt-dev libssl-dev libxxhash-dev libzstd-dev liblz4-dev zlib1g-dev libidn2-dev`.
 - `bmake`, for openrsync only. Without it openrsync is skipped.
 
 Releases before 3.4 are built with `-std=gnu17`, and those before 3.2 with extra relaxed flags, because current GCC treats their old-style C as errors.

@@ -53,6 +53,15 @@ func stockOrder(t *testing.T, proto int, dir string) []Entry {
 
 func TestCompareMatchesRsync(t *testing.T) {
 	dir := t.TempDir()
+	// The names differ only in case in places ("Foo", "foo"), which a
+	// case-insensitive filesystem (macOS by default) folds together.
+	if err := os.WriteFile(filepath.Join(dir, "case"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "CASE")); err == nil {
+		t.Skip("the filesystem ignores case")
+	}
+	os.Remove(filepath.Join(dir, "case"))
 	for _, n := range awkward {
 		p := filepath.Join(dir, filepath.FromSlash(strings.TrimSuffix(n, "/")))
 		if strings.HasSuffix(n, "/") {

@@ -72,7 +72,7 @@ func TestReceiveFileList28Devices(t *testing.T) {
 	var b flistBuilder
 	// A minor that does not fit a byte: major and minor as integers.
 	b.entry(rsync.XMIT_TOP_DIR, "a", chr)
-	b.WriteInt32(300)
+	b.WriteInt32(200) // macOS dev_t has 8 bits of major
 	b.WriteInt32(70000)
 	// A regular file between devices must not reset the major.
 	b.entry(rsync.XMIT_TOP_DIR, "b", reg)
@@ -98,7 +98,7 @@ func TestReceiveFileList28Devices(t *testing.T) {
 	if len(files) != 7 {
 		t.Fatalf("got %d files, want 7", len(files))
 	}
-	for name, want := range map[string][2]uint32{"a": {300, 70000}, "c": {300, 5}} {
+	for name, want := range map[string][2]uint32{"a": {200, 70000}, "c": {200, 5}} {
 		if maj, min := splitRdev(files[name].Rdev); maj != want[0] || min != want[1] {
 			t.Errorf("%s: device %d,%d, want %d,%d", name, maj, min, want[0], want[1])
 		}

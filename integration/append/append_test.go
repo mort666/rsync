@@ -50,7 +50,7 @@ func writeRandom(t *testing.T, path string, size int) []byte {
 func TestAppendToSystemRsync(t *testing.T) {
 	t.Parallel()
 
-	rsyncBin := rsynctest.AnyRsync(t)
+	rsyncBin := rsynctest.TridgeOrGTFO(t, "openrsync has no --append")
 
 	tmp := t.TempDir()
 	srcDir := filepath.Join(tmp, "src")
@@ -419,7 +419,7 @@ func sendToSystemRsync(t *testing.T, args []string, srcPath, destDir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rsync := exec.Command(rsynctest.AnyRsync(t), client.ServerCommandOptions(destDir)...)
+	rsync := exec.Command(rsynctest.TridgeOrGTFO(t, "openrsync has no --append"), client.ServerCommandOptions(destDir)...)
 	stdin, err := rsync.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
