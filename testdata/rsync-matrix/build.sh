@@ -17,9 +17,11 @@ jobs=${JOBS:-$(nproc 2>/dev/null || echo 4)}
 mkdir -p "$dir/src" "$dir/log"
 
 # Releases before 3.4 predate C23 (where "f()" means "f(void)"), and the
-# oldest also predate GCC 14's stricter defaults.
+# oldest also predate GCC 14's stricter defaults. Ubuntu's GCC defaults to
+# _FORTIFY_SOURCE=3, which aborts rsync 3.1.3 as a server ("buffer overflow
+# detected"); level 2, as Arch and most distributions use, does not.
 new_cflags="-O2 -std=gnu17"
-old_cflags="-O2 -std=gnu89 -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-int-conversion -Wno-return-mismatch"
+old_cflags="-O2 -std=gnu89 -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-incompatible-pointer-types -Wno-int-conversion -Wno-return-mismatch -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2"
 
 build_release() {
   name=$1 version=$2 sum=$3 kind=$4

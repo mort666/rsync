@@ -104,7 +104,14 @@ func startStockDaemonConf(t *testing.T, dir, conf string) (addr, logFile string)
 	_, port, _ := net.SplitHostPort(addr)
 	l.Close()
 	confFile := filepath.Join(t.TempDir(), "rsyncd.conf")
-	cfg := fmt.Sprintf("use chroot = no\nport = %s\n[mod]\n  path = %s\n%s", port, dir, conf)
+	cfg := fmt.Sprintf("use chroot = no\nport = %s\n", port)
+	if os.Getuid() == 0 {
+		// A daemon started as root runs transfers as nobody, which cannot
+		// write to the test's folders (CI runs the suite as root in
+		// containers).
+		cfg += "uid = 0\ngid = 0\n"
+	}
+	cfg += fmt.Sprintf("[mod]\n  path = %s\n%s", dir, conf)
 	if !strings.Contains(conf, "read only") {
 		cfg += "  read only = yes\n"
 	}
