@@ -1,6 +1,7 @@
 package receiver
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -171,12 +172,26 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 		}
 	}
 
+	// From protocol 33 a server receiver tells its sending client how many
+	// 4 KiB blocks it wrote. rsync's receiver sends it to its generator
+	// after the transfer, which passes it on (main.c:do_recv,
+	// io.c:read_a_msg); here receiver and generator are one, so it goes
+	// straight out, ahead of the goodbye.
+	if c.Session.Protocol >= 33 && rt.Opts.Server {
+		if err := c.WriteMsg(rsyncwire.MsgBlockStats, binary.LittleEndian.AppendUint64(nil, uint64(rt.touchedBlocks))); err != nil {
+			return nil, err
+		}
+	}
+
 	var stats *rsyncstats.TransferStats
 	if !noReport {
 		var err error
 		stats, err = rt.report(c)
 		if err != nil {
 			return nil, err
+		}
+		if c.Session.Protocol >= 33 {
+			stats.TouchedBlocks = rt.touchedBlocks
 		}
 	}
 

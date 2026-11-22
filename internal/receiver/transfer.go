@@ -94,15 +94,16 @@ type Transfer struct {
 	TellClient func(tag uint8, msg string)
 
 	// state
-	Conn         *rsyncwire.Conn
-	Seed         int32
-	IOErrors     int32
-	Users        map[int32]mapping
-	Groups       map[int32]mapping
-	defaultPerms fs.FileMode
-	retouchDirs  []retouchDir
-	delStats     rsyncwire.DelStats // what --delete removed (see countDeleted)
-	dec          rsynctoken.Decoder // see decoder
+	Conn          *rsyncwire.Conn
+	Seed          int32
+	IOErrors      int32
+	Users         map[int32]mapping
+	Groups        map[int32]mapping
+	defaultPerms  fs.FileMode
+	retouchDirs   []retouchDir
+	delStats      rsyncwire.DelStats // what --delete removed (see countDeleted)
+	touchedBlocks int64              // 4 KiB blocks written to files (protocol 33 MSG_BLOCK_STATS)
+	dec           rsynctoken.Decoder // see decoder
 }
 
 type retouchDir struct {

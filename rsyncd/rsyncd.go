@@ -528,7 +528,7 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 	// From protocol 30 the client multiplexes its output as well
 	// (main.c:start_server, need_messages_from_generator).
 	if c.Session.Protocol >= 30 {
-		mrd := &rsyncwire.MultiplexReader{Env: env, Reader: rd, Trace: trace}
+		mrd := &rsyncwire.MultiplexReader{Env: env, Reader: rd, Trace: trace, Protocol: c.Session.Protocol}
 		c.Reader = struct {
 			io.Reader
 			io.Closer

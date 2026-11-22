@@ -155,6 +155,13 @@ func gokrazyPull(t *testing.T, addr, path, dest string, args ...string) (string,
 // paths are the destination when it receives, the sources when it sends.
 func gokrazyRun(t *testing.T, addr, remotePath string, paths []string, extra []rsyncclient.Option, args ...string) (string, error) {
 	t.Helper()
+	_, log, err := gokrazyRunResult(t, addr, remotePath, paths, extra, args...)
+	return log, err
+}
+
+// gokrazyRunResult is gokrazyRun, also returning the client's result.
+func gokrazyRunResult(t *testing.T, addr, remotePath string, paths []string, extra []rsyncclient.Option, args ...string) (*rsyncclient.Result, string, error) {
+	t.Helper()
 	var log bytes.Buffer
 	opts := append([]rsyncclient.Option{rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(rsynctest.NopClose(io.MultiWriter(&log, testlogger.New(t)))), rsyncclient.DontRestrict()}, extra...)
 	client, err := rsyncclient.New(args, opts...)
@@ -166,8 +173,8 @@ func gokrazyRun(t *testing.T, addr, remotePath string, paths []string, extra []r
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	_, err = client.RunDaemon(t.Context(), conn, remotePath, paths)
-	return log.String(), err
+	res, err := client.RunDaemon(t.Context(), conn, remotePath, paths)
+	return res, log.String(), err
 }
 
 func devNull(t *testing.T) (major, minor uint32) {

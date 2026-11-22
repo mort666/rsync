@@ -61,9 +61,9 @@ any issues you run into!
 
 | Language | URL                                                                                 | Note                                                                                                                                  | Max Protocol                                                                                                        | Server mode? |
 |----------|-------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------|--------------|
-| C        | [RsyncProject/rsync](https://github.com/RsyncProject/rsync) (formerly WayneD/rsync) | original “tridge” implementation; I found [older versions](https://github.com/WayneD/rsync/tree/v2.6.1pre2) easier to study           | [32](https://github.com/RsyncProject/rsync/blob/v3.4.1/rsync.h#L114)                                                | ✔ yes        |
+| C        | [RsyncProject/rsync](https://github.com/RsyncProject/rsync) (formerly WayneD/rsync) | original “tridge” implementation; I found [older versions](https://github.com/WayneD/rsync/tree/v2.6.1pre2) easier to study           | [33](https://github.com/RsyncProject/rsync/blob/v3.5.2/rsync.h#L115)                                               | ✔ yes        |
 | C        | [kristapsdz/openrsync](https://github.com/kristapsdz/openrsync)                     | OpenBSD, good docs                                                                                                                    | [27](https://github.com/kristapsdz/openrsync/blob/e54d57f7572381da2b549d39c7968fc79dac8e1d/extern.h#L30)            | ✔ yes        |
-| **Go**   | [gokrazy/rsync](https://github.com/gokrazy/rsync)                                   | → you are here ←                                                                                                                      | [32](internal/rsyncwire/session.go)                                                                                 | ✔ yes 🎉     |
+| **Go**   | [gokrazy/rsync](https://github.com/gokrazy/rsync)                                   | → you are here ←                                                                                                                      | [33](internal/rsyncwire/session.go)                                                                                 | ✔ yes 🎉     |
 | **Go**   | [jbreiding/rsync-go](https://github.com/jbreiding/rsync-go)                         | rsync algorithm                                                                                                                       |                                                                                                                     | ❌ no        |
 | **Go**   | [kaiakz/rsync-os](https://github.com/kaiakz/rsync-os)                               | only client/receiver                                                                                                                  | [27](https://github.com/kaiakz/rsync-os/blob/64e84daeabb1fa4d2c7cf766c196306adfba6cb2/rsync/const.go#L4)            | ❌ no        |
 | **Go**   | [knight42](https://gist.github.com/knight42/6ad35ce6fbf96519259b43a8c3f37478)       | proxy                                                                                                                                 |                                                                                                                     | ❌ no        |
@@ -204,6 +204,9 @@ negotiate a faster checksum (xxh128).
   large trees send their whole file list up front.
 * zstd-compressed data (`--zc=zstd`) can be sent but not received; `-z`
   negotiates lz4 instead when gokrazy/rsync receives.
+* The `sha1` checksum, and the SHA-3 ones coming in rsync 4.0 (`sha3-256`,
+  `sha3-384`, `sha3-512`), are not offered. rsync never picks them unless
+  asked to, with `--checksum-choice` or `RSYNC_CHECKSUM_LIST`.
 
 ## Supported environments and privilege dropping
 

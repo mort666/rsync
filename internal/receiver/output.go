@@ -63,6 +63,32 @@ type pendingFile struct {
 	written   int64
 	closed    bool
 	done      bool
+
+	// blocks tracks the 4 KiB blocks this file's writes touched.
+	blocks blockTracker
+}
+
+// blockTracker counts the distinct 4 KiB blocks a file's writes touch,
+// counting a block that two writes share once. Writes go forward, so the
+// last block touched is all it needs to remember.
+//
+// rsync/fileio.c:track_block_touches
+type blockTracker struct {
+	touched int64
+	last    int64 // index of the last block touched, plus one (0: none yet)
+}
+
+func (b *blockTracker) track(offset, n int64) {
+	if n <= 0 {
+		return
+	}
+	start := offset / 4096
+	end := (offset+n-1)/4096 + 1 // one past the last block
+	start = max(start, b.last)
+	if end > start {
+		b.touched += end - start
+		b.last = end
+	}
 }
 
 func newPendingFile(root *os.Root, fn string, mode outputMode) (*pendingFile, error) {
@@ -119,8 +145,23 @@ func (p *pendingFile) Write(b []byte) (int, error) {
 		return p.sparseWrite(b)
 	}
 	n, err := p.f.Write(b)
+	p.blocks.track(p.written, int64(n))
 	p.written += int64(n)
 	return n, err
+}
+
+// Skip moves past n bytes that are already in the file: a block an
+// in-place transfer matched at its own offset, which rsync does not write
+// again (receiver.c:receive_data, skip_matched).
+func (p *pendingFile) Skip(n int64) error {
+	if !p.mode.Inplace {
+		return fmt.Errorf("skipping %d bytes of %s needs --inplace", n, p.finalPath)
+	}
+	if _, err := p.f.Seek(n, io.SeekCurrent); err != nil {
+		return err
+	}
+	p.written += n
+	return nil
 }
 
 // sparse reports whether runs of zeros become holes; see outputMode.Sparse.
@@ -148,6 +189,7 @@ func (p *pendingFile) sparseWrite(buf []byte) (int, error) {
 		if _, err := p.f.WriteAt(data, p.written); err != nil {
 			return 0, err
 		}
+		p.blocks.track(p.written, int64(len(data)))
 		p.written += int64(len(data))
 	}
 	return len(buf), nil

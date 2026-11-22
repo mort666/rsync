@@ -16,8 +16,9 @@ const (
 	// one it announces unless --protocol asks for less. Each version is added
 	// once the interop matrix passes at it. 30 arrived with rsync 3.0.0
 	// (2008), 31 with 3.1.0 (2013), 32 with 3.4.0 (2025), which changed
-	// nothing on the wire; openrsync still speaks 27.
-	MaxProtocolVersion = 32
+	// nothing on the wire, and 33 with 3.5.1 (2026), which adds
+	// MSG_BLOCK_STATS; openrsync still speaks 27.
+	MaxProtocolVersion = 33
 
 	// maxSaneProtocolVersion matches rsync's MAX_PROTOCOL_VERSION. A peer
 	// announcing more than this is not speaking rsync at all, usually

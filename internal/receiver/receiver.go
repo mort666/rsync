@@ -165,6 +165,7 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		return err
 	}
 	defer out.Cleanup()
+	defer func() { rt.touchedBlocks += out.blocks.touched }()
 
 	h := rt.strong().NewTransferHash()
 
@@ -235,8 +236,15 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 			dataLen = sh.RemainderLength
 		}
 		blockWr := wr
+		// In place, a block matched at its own offset is already there:
+		// only the checksum needs it. (The basis is the destination itself
+		// here, as --inplace turns off the partial dir.)
+		skip := rt.Opts.Inplace && offset2 == offset
+		if skip {
+			blockWr = h
+		}
 		if see := dec.See(int64(dataLen)); see != nil {
-			blockWr = io.MultiWriter(wr, see)
+			blockWr = io.MultiWriter(blockWr, see)
 		}
 		dataReader := io.NewSectionReader(localFile, offset2, int64(dataLen))
 		n, err := io.CopyBuffer(blockWr, dataReader, buf[:])
@@ -246,6 +254,11 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		if n != int64(dataLen) {
 			// The basis file shrank since the generator summed it.
 			return fmt.Errorf("reading block %d of %s: %w", token, out.Name(), io.ErrUnexpectedEOF)
+		}
+		if skip {
+			if err := out.Skip(n); err != nil {
+				return err
+			}
 		}
 		offset += n
 	}

@@ -34,6 +34,10 @@ type Env struct {
 	// this side sends, its sender adds the bits for what it leaves out.
 	IOErrors atomic.Int32
 
+	// BlockStats is how many 4 KiB blocks a server receiver says it wrote
+	// (MSG_BLOCK_STATS, protocol 33+), for a sending client's stats.
+	BlockStats atomic.Int64
+
 	logger log.Logger
 }
 

@@ -23,6 +23,7 @@ const (
 	MsgWarning     uint8 = 4
 	MsgErrorSocket uint8 = 5
 	MsgLog         uint8 = 6
+	MsgBlockStats  uint8 = 11  // the receiver's count of 4 KiB blocks written (protocol 33+)
 	MsgIOError     uint8 = 22  // the sending side had an I/O error (protocol 30+)
 	MsgIOTimeout   uint8 = 33  // a daemon's --timeout, for its client (protocol 31+)
 	MsgNoop        uint8 = 42  // a keep-alive (protocol 30)
@@ -82,6 +83,10 @@ type MultiplexReader struct {
 	Env    *rsyncos.Env
 	Reader io.Reader
 	Trace  *Trace // optional
+
+	// Protocol is the session's protocol version, for messages that only
+	// exist from some version on.
+	Protocol int32
 }
 
 // rsync.h defines IO_BUFFER_SIZE as 32 * 1024, but gokr-rsyncd increases it to
@@ -154,6 +159,14 @@ func (w *MultiplexReader) Read(p []byte) (n int, err error) {
 		if len(payload) != 4 {
 			return 0, fmt.Errorf("invalid MSG_IO_TIMEOUT length %d", len(payload))
 		}
+		return 0, nil
+	case MsgBlockStats:
+		// A server receiver's count of the 4 KiB blocks it wrote, for a
+		// sending client's --stats (io.c:read_a_msg).
+		if len(payload) != 8 || w.Protocol < 33 {
+			return 0, fmt.Errorf("invalid MSG_BLOCK_STATS (length %d, protocol %d)", len(payload), w.Protocol)
+		}
+		w.Env.BlockStats.Store(int64(binary.LittleEndian.Uint64(payload)))
 		return 0, nil
 	case MsgNoop:
 		if len(payload) != 0 {

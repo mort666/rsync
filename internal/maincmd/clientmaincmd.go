@@ -373,9 +373,10 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	}
 
 	mrd := &rsyncwire.MultiplexReader{
-		Env:    osenv,
-		Reader: conn,
-		Trace:  trace,
+		Env:      osenv,
+		Reader:   conn,
+		Trace:    trace,
+		Protocol: c.Session.Protocol,
 	}
 	// TODO: rearchitect such that our buffer can be smaller than the largest
 	// rsync message size

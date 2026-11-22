@@ -115,11 +115,17 @@ func (st *Transfer) Do(crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWri
 		return nil, fmt.Errorf("protocol error: expected final -1, got %d", finish)
 	}
 
-	return &rsyncstats.TransferStats{
+	stats := &rsyncstats.TransferStats{
 		Read:    crd.BytesRead,
 		Written: cwr.BytesWritten,
 		Size:    fileList.TotalSize,
-	}, nil
+	}
+	if st.Conn.Session.Protocol >= 33 && st.Env != nil {
+		// The server receiver's count (MSG_BLOCK_STATS), which has come
+		// in by the end of the goodbye.
+		stats.TouchedBlocks = st.Env.BlockStats.Load()
+	}
+	return stats, nil
 }
 
 // readGoodbye reads one index of the final goodbye.
