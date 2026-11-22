@@ -4,6 +4,7 @@ package flist_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -207,7 +208,10 @@ func TestKeepDirlinks(t *testing.T) {
 // --munge-links on a receiving client, and munge_symlinks on a daemon
 // module, which also takes the prefix off what the daemon sends.
 func TestMungeLinks(t *testing.T) {
-	rsynctest.TridgeOrGTFO(t, "compares with stock rsync")
+	bin := rsynctest.TridgeOrGTFO(t, "compares with stock rsync")
+	if out, _ := exec.Command(bin, "--help").Output(); !strings.Contains(string(out), "--munge-links") {
+		t.Skip("stock rsync has no --munge-links (new in 3.1)")
+	}
 	src := linkTree(t, false)
 	if err := os.Symlink("/rsyncd-munged/file", filepath.Join(src, "munged")); err != nil {
 		t.Fatal(err)

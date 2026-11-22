@@ -23,6 +23,9 @@ import (
 func (rt *Transfer) GenerateFiles(fileList []*File) error {
 	phase := 0
 	for idx, f := range fileList {
+		if _, ok := rt.hlinkLater[f]; ok {
+			continue // linked to its group's first at the end
+		}
 		if !rt.listOnly() {
 			rt.genXattr = rt.checkXattrs(f)
 		}
@@ -292,10 +295,6 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 			return err
 		}
 		return nil
-	}
-
-	if rt.Opts.PreserveHardlinks {
-		// TODO: hard link check
 	}
 
 	if !f.FileMode().IsRegular() {

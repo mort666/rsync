@@ -126,6 +126,10 @@ type Transfer struct {
 	Groups        map[int32]mapping
 	defaultPerms  fs.FileMode
 	retouchDirs   []retouchDir
+
+	// hlinkLater maps each later member of a hard-link group to the
+	// group's first (hlink.go). It is read-only once the transfer runs.
+	hlinkLater map[*File]*File
 	delStats      rsyncwire.DelStats // what --delete removed (see countDeleted)
 	touchedBlocks int64              // 4 KiB blocks written to files (protocol 33 MSG_BLOCK_STATS)
 	dec           rsynctoken.Decoder // see decoder

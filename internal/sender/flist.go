@@ -330,12 +330,10 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 
 	// Hard-link identity, as rsync's make_file picks it: below protocol 28
 	// for every regular file, from 28 for anything but a folder with more
-	// than one link. Only a server sends it: its client asked for -H and
-	// expects it. A gokrazy client does not pass -H on, so its server does
-	// not expect it.
+	// than one link.
 	var sendHlink bool
 	var hlinkDev, hlinkIno int64
-	if opts.PreserveHardLinks() && opts.Server() {
+	if opts.PreserveHardLinks() {
 		dev, ino, nlink, ok := hardLinkID(info)
 		if !ok {
 			// No inode numbers here. Give each file its own, so that a
