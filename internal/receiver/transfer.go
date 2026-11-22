@@ -97,6 +97,7 @@ type Transfer struct {
 	Groups       map[int32]mapping
 	defaultPerms fs.FileMode
 	retouchDirs  []retouchDir
+	delStats     rsyncwire.DelStats // what --delete removed (see countDeleted)
 	dec          rsynctoken.Decoder // see decoder
 }
 

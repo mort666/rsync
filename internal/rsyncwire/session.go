@@ -15,8 +15,8 @@ const (
 	// MaxProtocolVersion is the newest version gokrazy/rsync speaks, and the
 	// one it announces unless --protocol asks for less. Each version is added
 	// once the interop matrix passes at it. 30 arrived with rsync 3.0.0
-	// (2008); openrsync still speaks 27.
-	MaxProtocolVersion = 30
+	// (2008), 31 with 3.1.0 (2013); openrsync still speaks 27.
+	MaxProtocolVersion = 31
 
 	// maxSaneProtocolVersion matches rsync's MAX_PROTOCOL_VERSION. A peer
 	// announcing more than this is not speaking rsync at all, usually

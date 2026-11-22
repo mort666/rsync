@@ -30,6 +30,9 @@ func (f *File) entry() flistcmp.Entry {
 	return flistcmp.Entry{Name: filepath.ToSlash(f.Name), IsDir: f.Mode&rsync.S_IFMT == rsync.S_IFDIR}
 }
 
+// maxWireNsec is rsync's MAX_WIRE_NSEC.
+const maxWireNsec = 999999999
+
 type File struct {
 	Name       string
 	Length     int64
@@ -133,21 +136,32 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	}
 	f.Length = length
 
+	// XMIT_SAME_TIME repeats the seconds only: the nanoseconds come with
+	// XMIT_MOD_NSEC (protocol 31+), and are 0 without it.
+	var modTime int64
 	if flags&rsync.XMIT_SAME_TIME != 0 {
-		f.ModTime = last.ModTime
+		modTime = last.ModTime.Unix()
 	} else if proto >= 30 {
-		modTime, err := rt.Conn.ReadVarlong(4)
-		if err != nil {
+		if modTime, err = rt.Conn.ReadVarlong(4); err != nil {
 			return nil, err
 		}
-		f.ModTime = time.Unix(modTime, 0)
 	} else {
-		modTime, err := rt.Conn.ReadInt32()
+		t, err := rt.Conn.ReadInt32()
 		if err != nil {
 			return nil, err
 		}
-		f.ModTime = time.Unix(int64(modTime), 0)
+		modTime = int64(t)
 	}
+	var nsec int32
+	if flags&rsync.XMIT_MOD_NSEC != 0 && proto >= 31 {
+		if nsec, err = rt.Conn.ReadVarint(); err != nil {
+			return nil, err
+		}
+		if nsec < 0 || nsec > maxWireNsec {
+			return nil, fmt.Errorf("invalid mtime nanoseconds %d for %s", nsec, f.Name)
+		}
+	}
+	f.ModTime = time.Unix(modTime, int64(nsec))
 
 	if flags&rsync.XMIT_SAME_MODE != 0 {
 		f.Mode = last.Mode
@@ -202,7 +216,8 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	isLink := mode == rsync.S_IFLNK
 	isReg := mode == rsync.S_IFREG
 
-	if (rt.Opts.PreserveDevices && isDev) || (rt.Opts.PreserveSpecials && isSpecial) {
+	// Specials carry a dummy device number below protocol 31 only.
+	if (rt.Opts.PreserveDevices && isDev) || (rt.Opts.PreserveSpecials && isSpecial && proto < 31) {
 		if proto < 28 {
 			if flags&rsync.XMIT_SAME_RDEV_pre28 != 0 {
 				f.Rdev = last.Rdev

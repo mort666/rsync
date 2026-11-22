@@ -43,6 +43,16 @@ var protocolVersionRe = regexp.MustCompile(`protocol version (\d+)`)
 
 // stockMaxProtocol is the newest protocol the stock rsync on PATH speaks,
 // from its --version line ("rsync  version 2.6.9  protocol version 29").
+// stockDaemonProtocol is the protocol a session with a stock daemon runs at
+// when its client asks for proto: run-tests.sh -p forces the daemon lower
+// (RSYNC_MATRIX_PROTOCOL), and a client's own --protocol cannot raise it.
+func stockDaemonProtocol(proto int) int {
+	if forced, err := strconv.Atoi(os.Getenv("RSYNC_MATRIX_PROTOCOL")); err == nil {
+		return min(proto, forced)
+	}
+	return proto
+}
+
 func stockMaxProtocol(t *testing.T) int {
 	t.Helper()
 	bin := rsynctest.TridgeOrGTFO(t, "compares with stock rsync")

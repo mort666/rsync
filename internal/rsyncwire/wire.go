@@ -24,7 +24,9 @@ const (
 	MsgErrorSocket uint8 = 5
 	MsgLog         uint8 = 6
 	MsgIOError     uint8 = 22  // the sending side had an I/O error (protocol 30+)
+	MsgIOTimeout   uint8 = 33  // a daemon's --timeout, for its client (protocol 31+)
 	MsgNoop        uint8 = 42  // a keep-alive (protocol 30)
+	MsgErrorExit   uint8 = 86  // the peer is exiting with an error (protocol 31+)
 	MsgSuccess     uint8 = 100 // successfully updated indicated flist index
 	MsgDeleted     uint8 = 101 // successfully deleted a file on receiving side (protocol 29+)
 	MsgNoSend      uint8 = 102 // the sender failed to open a file the generator wanted (protocol 30+)
@@ -134,6 +136,25 @@ func (w *MultiplexReader) Read(p []byte) (n int, err error) {
 		}
 		w.Env.IOErrors.Or(int32(binary.LittleEndian.Uint32(payload)) & ioerrValidMask)
 		return 0, nil
+	case MsgErrorExit:
+		// The peer stops here with an error, which its other messages
+		// explain, and waits for this side to close (cleanup.c,
+		// io.c:read_a_msg). A message without a code answers one of ours,
+		// which this side does not send.
+		if len(payload) == 4 {
+			return 0, &RemoteExitError{Code: int32(binary.LittleEndian.Uint32(payload))}
+		}
+		if len(payload) != 0 {
+			return 0, fmt.Errorf("invalid MSG_ERROR_EXIT length %d", len(payload))
+		}
+		return 0, &RemoteExitError{}
+	case MsgIOTimeout:
+		// A daemon's --timeout, which the client may adopt. This side does
+		// not time out on its own.
+		if len(payload) != 4 {
+			return 0, fmt.Errorf("invalid MSG_IO_TIMEOUT length %d", len(payload))
+		}
+		return 0, nil
 	case MsgNoop:
 		if len(payload) != 0 {
 			return 0, fmt.Errorf("invalid MSG_NOOP length %d", len(payload))
@@ -219,6 +240,14 @@ type Conn struct {
 	// from the start, a client's from protocol 30. It carries messages
 	// besides the data (see WriteMsg).
 	Mux *MultiplexWriter
+
+	// DelStats is what the peer's generator said --delete removed
+	// (protocol 31+), once ReadNdxAndAttrs has read it (GotDelStats).
+	// ForwardDelStats marks a server sender, which passes it on to its
+	// client.
+	DelStats        DelStats
+	GotDelStats     bool
+	ForwardDelStats bool
 
 	// File-list index state for each direction (protocol 30+). The reading
 	// and writing goroutines each touch only their own.
@@ -343,4 +372,18 @@ func CounterPair(r io.ReadCloser, w io.WriteCloser) (*CountingReader, *CountingW
 	crd := &CountingReader{R: r}
 	cwr := &CountingWriter{W: w}
 	return crd, cwr
+}
+
+// RemoteExitError is the peer telling this side it exits with an error
+// (MSG_ERROR_EXIT, protocol 31+). Code is its rsync exit code, such as 23
+// for a partial transfer, or 0 when the message carried none.
+type RemoteExitError struct {
+	Code int32
+}
+
+func (e *RemoteExitError) Error() string {
+	if e.Code == 0 {
+		return "the remote rsync exited with an error"
+	}
+	return fmt.Sprintf("the remote rsync exited with error code %d", e.Code)
 }

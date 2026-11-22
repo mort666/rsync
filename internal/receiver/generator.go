@@ -101,6 +101,9 @@ func (rt *Transfer) skipFile(f *File, st os.FileInfo) (bool, error) {
 	return modTimeEqual(st.ModTime(), f.ModTime), nil
 }
 
+// modTimeEqual is the quick check's comparison: whole seconds, as rsync
+// compares with --modify-window=0 (util1.c:same_time). Setting times
+// compares exactly, nanoseconds included (rsync.c:same_mtime).
 func modTimeEqual(a, b time.Time) bool {
 	a = a.Truncate(time.Second)
 	b = b.Truncate(time.Second)
@@ -123,7 +126,7 @@ func (rt *Transfer) setPerms(f *File, perm fs.FileMode) error {
 	if rt.Opts.PreserveTimes &&
 		!isLink &&
 		!(isDir && rt.Opts.OmitDirTimes) &&
-		!modTimeEqual(st.ModTime(), f.ModTime) {
+		!st.ModTime().Equal(f.ModTime) {
 		if err := rt.DestRoot.Chtimes(f.Name, f.ModTime, f.ModTime); err != nil {
 			return err
 		}

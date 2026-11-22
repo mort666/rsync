@@ -87,10 +87,29 @@ func (st *Transfer) Do(crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWri
 		st.Logger.Printf("reading final int32")
 	}
 
-	// The final goodbye: NDX_DONE (main.c:read_final_goodbye).
-	finish, err := st.Conn.ReadNdx()
+	// The final goodbye: NDX_DONE (main.c:read_final_goodbye). From
+	// protocol 31 it is the generator's fourth NDX_DONE, which the sender
+	// answers before the last; delete stats may come first.
+	finish, err := st.readGoodbye(len(fileList.Files))
 	if err != nil {
 		return nil, err
+	}
+	if finish == rsyncwire.NdxDone && st.Conn.Session.Protocol >= 31 {
+		// A server sender passes delete stats on to its client
+		// (rsync.c:read_ndx_and_attrs) once it has read the NDX_DONE
+		// after them: sending while the client is still writing would
+		// block both over an unbuffered connection.
+		if st.Conn.ForwardDelStats && st.Conn.GotDelStats {
+			if err := st.Conn.WriteDelStats(st.Conn.DelStats); err != nil {
+				return nil, err
+			}
+		}
+		if err := st.Conn.WriteNdx(rsyncwire.NdxDone); err != nil {
+			return nil, err
+		}
+		if finish, err = st.readGoodbye(len(fileList.Files)); err != nil {
+			return nil, err
+		}
 	}
 	if finish != rsyncwire.NdxDone {
 		return nil, fmt.Errorf("protocol error: expected final -1, got %d", finish)
@@ -101,4 +120,13 @@ func (st *Transfer) Do(crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWri
 		Written: cwr.BytesWritten,
 		Size:    fileList.TotalSize,
 	}, nil
+}
+
+// readGoodbye reads one index of the final goodbye.
+func (st *Transfer) readGoodbye(numFiles int) (int32, error) {
+	if st.Conn.Session.Protocol < 29 {
+		return st.Conn.ReadNdx()
+	}
+	ndx, _, err := st.Conn.ReadNdxAndAttrs(numFiles)
+	return ndx, err
 }

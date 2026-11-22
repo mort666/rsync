@@ -53,6 +53,13 @@ while read -r name _ _ _; do
   path=$bin
   label=$name
   if [ -n "$protocol" ]; then
+    # A build older than the protocol cannot be forced up to it.
+    speaks=$(echo "$version" | sed -n 's/.*protocol version \([0-9]*\).*/\1/p')
+    if [ -n "$speaks" ] && [ "$speaks" -lt "$protocol" ]; then
+      summary="$summary$(printf '%-15s skipped (speaks protocol %s at most)\n' "$name@$protocol" "$speaks")
+"
+      continue
+    fi
     path="$dir/wrap/$name-p$protocol"
     mkdir -p "$path"
     printf '#!/bin/sh\nexec "%s/rsync" --protocol=%s "$@"\n' "$bin" "$protocol" >"$path/rsync"
@@ -62,8 +69,10 @@ while read -r name _ _ _; do
   log="$dir/test-logs/$label.log"
   echo "== $label: $version"
   set +e
-  # RSYNCTEST_EXTRA_RODIRS lets sandboxed tests run the build behind a wrapper.
-  (cd "$root" && PATH="$path:$PATH" RSYNCTEST_EXTRA_RODIRS="$bin" go test -count=1 -timeout 10m "$@") >"$log" 2>&1
+  # RSYNCTEST_EXTRA_RODIRS lets sandboxed tests run the build behind a
+  # wrapper. RSYNC_MATRIX_PROTOCOL tells tests which protocol the wrapper
+  # forces: a stock daemon speaks it whatever its client asks for.
+  (cd "$root" && PATH="$path:$PATH" RSYNCTEST_EXTRA_RODIRS="$bin" RSYNC_MATRIX_PROTOCOL="$protocol" go test -count=1 -timeout 10m "$@") >"$log" 2>&1
   rc=$?
   set -e
   ok=$(grep -c '^ok ' "$log" || true)

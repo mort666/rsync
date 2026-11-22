@@ -276,7 +276,9 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 
 	// From protocol 28 a device number goes as major and minor, the minor
 	// in one byte when it fits.
-	sendRdev := (opts.PreserveDevices() && isDev) || (opts.PreserveSpecials() && isSpecial)
+	// Specials (FIFOs, sockets) carry a dummy one below protocol 31 only
+	// (flist.c:send_file_entry).
+	sendRdev := (opts.PreserveDevices() && isDev) || (opts.PreserveSpecials() && isSpecial && proto < 31)
 	var rdevMajor, rdevMinor uint32
 	if sendRdev && proto >= 28 {
 		if isDev {
@@ -328,6 +330,14 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 			s.fileList.hlinkFirst[key] = int32(len(s.fileList.Files) - 1)
 			xflags |= rsync.XMIT_HLINK_FIRST
 		}
+	}
+
+	// From protocol 31 an mtime's nanoseconds follow it, when there are
+	// any (flist.c:send_file_entry, XMIT_MOD_NSEC).
+	var mtimeNsec int32
+	if t := info.ModTime(); proto >= 31 && !t.IsZero() && t.Nanosecond() != 0 {
+		mtimeNsec = int32(t.Nanosecond())
+		xflags |= rsync.XMIT_MOD_NSEC
 	}
 
 	// 1.   status byte, from protocol 28 two bytes when any of the upper
@@ -382,6 +392,9 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		s.fec.WriteVarlong(mtime, 4)
 	} else {
 		s.fec.WriteInt32(int32(mtime))
+	}
+	if xflags&rsync.XMIT_MOD_NSEC != 0 {
+		s.fec.WriteVarint(mtimeNsec)
 	}
 
 	// 7.   file mode (optional, mode_t, integer)

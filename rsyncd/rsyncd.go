@@ -691,6 +691,9 @@ func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader,
 		}
 	}
 
+	// A server sender passes the client generator's delete stats on to
+	// the client's receiver (protocol 31, rsync.c:read_ndx_and_attrs).
+	c.ForwardDelStats = true
 	st := &sender.Transfer{
 		Logger:   s.logger,
 		Opts:     opts,

@@ -67,6 +67,15 @@ func (c *Conn) ReadNdxAndAttrs(numFiles int) (int32, ItemAttrs, error) {
 		if ndx == NdxDone {
 			return ndx, ItemAttrs{}, nil
 		}
+		if ndx == NdxDelStats && c.Session.Protocol >= 31 {
+			// What --delete removed (protocol 31+).
+			d, err := c.readDelStats()
+			if err != nil {
+				return 0, ItemAttrs{}, err
+			}
+			c.DelStats, c.GotDelStats = d, true
+			continue
+		}
 		if ndx < 0 {
 			return 0, ItemAttrs{}, fmt.Errorf("invalid file index: %d (%d - %d)", ndx, NdxDone, numFiles-1)
 		}
