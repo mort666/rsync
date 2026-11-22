@@ -19,7 +19,7 @@ import (
 func TestBaselineSenderToSystemRsync(t *testing.T) {
 	t.Parallel()
 
-	rsyncBin := rsynctest.AnyRsync(t)
+	rsyncBin := rsynctest.TridgeOrGTFO(t, "openrsync has no --inplace or --partial as a server")
 
 	tmp := t.TempDir()
 	srcDir := filepath.Join(tmp, "src")
