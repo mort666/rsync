@@ -8,17 +8,17 @@ jobs:
   staticcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: dominikh/staticcheck-action@v1
+      - uses: actions/checkout@v7
+      - uses: dominikh/staticcheck-action@v1.4.1
 
   # Interop tests against pinned rsync releases, one per protocol version
   # (29 to 33), plus rsync master and openrsync. See testdata/rsync-matrix.
   interop-matrix:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
-    - uses: actions/setup-go@v5
+    - uses: actions/setup-go@v7
       with:
         go-version: 'stable'
 
@@ -29,7 +29,7 @@ jobs:
           build-essential bmake libacl1-dev libpopt-dev libssl-dev libxxhash-dev \
           libzstd-dev liblz4-dev zlib1g-dev
 
-    - uses: actions/cache@v4
+    - uses: actions/cache@v6
       with:
         path: ~/.cache/gokrazy-rsync-matrix
         key: rsync-matrix-${{ runner.os }}-${{ hashFiles('testdata/rsync-matrix/versions.txt', 'testdata/rsync-matrix/build.sh') }}
@@ -57,13 +57,15 @@ jobs:
 
     - name: upload test logs
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: rsync-matrix-test-logs
         path: ~/.cache/gokrazy-rsync-matrix/test-logs
 
   tests:
     strategy:
+      # Let each OS finish, so one failing does not hide the others.
+      fail-fast: false
       matrix:
         os:
         - macos-latest
@@ -72,9 +74,9 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
-    - uses: actions/setup-go@v5
+    - uses: actions/setup-go@v7
       with:
         # Latest stable version of Go, e.g. 1.20.2
         go-version: 'stable'

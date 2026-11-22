@@ -88,7 +88,7 @@ func FuzzMatch(f *testing.F) {
 		f.Add(s, "abc")
 	}
 	f.Fuzz(func(t *testing.T, pattern, name string) {
-		Match(pattern, name)
+		_ = Match(pattern, name) // must not panic, whatever it returns
 		var esc []byte
 		for i := 0; i < len(name); i++ {
 			esc = append(esc, '\\', name[i])
