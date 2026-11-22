@@ -190,10 +190,16 @@ func (w *MultiplexReader) Read(p []byte) (n int, err error) {
 		w.Env.Logf("deleting %s", name)
 		return 0, nil
 	case MsgSuccess:
-		// openrsync after 7c31e9525e89515401257621ddd7fb9f8019818d
-		// ("Massive up-merge of Apple's openrsync") started
-		// sending MsgSuccess unconditionally after every file.
-		// Ignore MsgSuccess for now to restore compatibility.
+		// The receiver has a file (--remove-source-files). openrsync
+		// after 7c31e9525e89515401257621ddd7fb9f8019818d ("Massive
+		// up-merge of Apple's openrsync") sends it after every file, so
+		// without the option it is ignored.
+		if len(payload) != 4 {
+			return 0, fmt.Errorf("invalid MSG_SUCCESS length %d", len(payload))
+		}
+		if w.Env != nil && w.Env.SourceDone != nil {
+			w.Env.SourceDone(int32(binary.LittleEndian.Uint32(payload)))
+		}
 		return 0, nil
 	case MsgData:
 		// continues below

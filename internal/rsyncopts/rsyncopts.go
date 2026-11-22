@@ -131,6 +131,8 @@ var tridgeDefaults = Options{
 	relative_paths:       -1,
 	implied_dirs:         1,
 	max_delete:           math.MinInt32,
+	max_size:             -1,
+	min_size:             -1,
 	whole_file:           -1,
 	do_compression_level: math.MinInt32,
 	rsync_path:           "rsync",
@@ -162,6 +164,8 @@ var gokrazyDefaults = Options{
 	relative_paths:       -1,
 	implied_dirs:         1,
 	max_delete:           math.MinInt32,
+	max_size:             -1,
+	min_size:             -1,
 	whole_file:           -1,
 	do_compression_level: math.MinInt32,
 	rsync_path:           "rsync",
@@ -256,6 +260,7 @@ type Options struct {
 	omit_dir_times         int
 	omit_link_times        int
 	modify_window          int
+	modify_window_set      bool
 	am_root                int      // 0 = normal, 1 = root, 2 = --super, -1 = --fake-super
 	remote_options         []string // -M: passed to the server as they are
 	basis_dirs             []string // --compare-dest, --copy-dest, --link-dest
@@ -284,6 +289,7 @@ type Options struct {
 	ignore_existing        int
 	max_size_arg           string
 	min_size_arg           string
+	max_size, min_size     int64 // -1: no limit
 	max_alloc_arg          string
 	sparse_files           int
 	preallocate_files      int
@@ -781,10 +787,47 @@ func (o *Options) SetLocalServer()            { o.local_server = 1 }
 func (o *Options) Server() bool               { return o.am_server != 0 }
 func (o *Options) Daemon() bool               { return o.am_daemon != 0 }
 func (o *Options) ConnectTimeoutSeconds() int { return o.connect_timeout }
-func (o *Options) AlwaysChecksum() bool       { return o.always_checksum != 0 }
-func (o *Options) WholeFile() bool            { return o.whole_file > 0 }
-func (o *Options) IgnoreTimes() bool          { return o.ignore_times != 0 }
-func (o *Options) Inplace() bool              { return o.inplace != 0 }
+
+// RemoveSourceFiles is --remove-source-files (or the old
+// --remove-sent-files): the sender removes what the receiver has.
+func (o *Options) RemoveSourceFiles() bool { return o.remove_source_files != 0 }
+
+// OneFileSystem is how many -x were given: one keeps the sender to the
+// file system of each source, two also leaves out the folders other file
+// systems are mounted on. NumericIds is --numeric-ids: ids go without the
+// names that map them.
+func (o *Options) OneFileSystem() int { return o.one_file_system }
+func (o *Options) NumericIds() bool   { return o.numeric_ids != 0 }
+
+// Deleting: --force, --ignore-errors, and --max-delete, MinInt32 when not
+// given and 0 for none (a negative count means none, as in rsync).
+func (o *Options) Force() bool        { return o.force_delete != 0 }
+func (o *Options) IgnoreErrors() bool { return o.ignore_errors != 0 }
+func (o *Options) MaxDelete() int {
+	if o.max_delete < 0 && o.max_delete != math.MinInt32 {
+		return 0
+	}
+	return o.max_delete
+}
+
+// Transfer selection on the receiving side: --size-only, --existing,
+// --ignore-existing, and --max-size and --min-size in bytes, -1 for none.
+func (o *Options) SizeOnly() bool          { return o.size_only != 0 }
+func (o *Options) IgnoreNonExisting() bool { return o.ignore_non_existing != 0 }
+func (o *Options) IgnoreExisting() bool    { return o.ignore_existing != 0 }
+func (o *Options) MaxSize() int64          { return o.max_size }
+func (o *Options) MinSize() int64          { return o.min_size }
+
+// IOTimeoutSeconds is --timeout: how long a connection may be idle.
+func (o *Options) IOTimeoutSeconds() int { return o.io_timeout }
+
+// ModifyWindow is --modify-window: how many seconds apart two mtimes may
+// be and still count as the same; below 0, their nanoseconds count too.
+func (o *Options) ModifyWindow() int    { return o.modify_window }
+func (o *Options) AlwaysChecksum() bool { return o.always_checksum != 0 }
+func (o *Options) WholeFile() bool      { return o.whole_file > 0 }
+func (o *Options) IgnoreTimes() bool    { return o.ignore_times != 0 }
+func (o *Options) Inplace() bool        { return o.inplace != 0 }
 
 // AppendMode is 0, or 2 for --append and --append-verify alike: below
 // protocol 30 rsync promotes --append to --append-verify
@@ -963,15 +1006,15 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"stderr", "", POPT_ARG_STRING, nil, OPT_STDERR},
 		//{"msgs2stderr", "", POPT_ARG_VAL, &o.msgs2stderr, 1},
 		//{"no-msgs2stderr", "", POPT_ARG_VAL, &o.msgs2stderr, 0},
-		//{"quiet", "q", POPT_ARG_NONE, nil, 'q'},
+		{"quiet", "q", POPT_ARG_NONE, nil, 'q'},
 		{"motd", "", POPT_ARG_VAL, &o.output_motd, 1},
 		{"no-motd", "", POPT_ARG_VAL, &o.output_motd, 0},
 		// Accepted so that a server takes it from a client; nothing prints
 		// the statistics yet.
 		{"stats", "", POPT_ARG_NONE, &o.do_stats, 0},
-		//{"human-readable", "h", POPT_ARG_NONE, nil, 'h'},
-		//{"no-human-readable", "", POPT_ARG_VAL, &o.human_readable, 0},
-		//{"no-h", "", POPT_ARG_VAL, &o.human_readable, 0},
+		{"human-readable", "h", POPT_ARG_NONE, nil, 'h'},
+		{"no-human-readable", "", POPT_ARG_VAL, &o.human_readable, 0},
+		{"no-h", "", POPT_ARG_VAL, &o.human_readable, 0},
 		{"dry-run", "n", POPT_ARG_NONE, &o.dry_run, 0},
 		{"archive", "a", POPT_ARG_NONE, nil, 'a'},
 		{"recursive", "r", POPT_ARG_VAL, &o.recurse, 2},
@@ -1013,7 +1056,7 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"omit-link-times", "J", POPT_ARG_VAL, &o.omit_link_times, 1},
 		//{"no-omit-link-times", "", POPT_ARG_VAL, &o.omit_link_times, 0},
 		//{"no-J", "", POPT_ARG_VAL, &o.omit_link_times, 0},
-		//{"modify-window", "@", POPT_ARG_INT, &o.modify_window, OPT_MODIFY_WINDOW},
+		{"modify-window", "@", POPT_ARG_INT, &o.modify_window, OPT_MODIFY_WINDOW},
 		{"super", "", POPT_ARG_VAL, &o.am_root, 2},
 		{"no-super", "", POPT_ARG_VAL, &o.am_root, 0},
 		{"fake-super", "", POPT_ARG_VAL, &o.am_root, -1},
@@ -1054,16 +1097,16 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"no-i-d", "", POPT_ARG_VAL, &o.implied_dirs, 0},
 		//{"chmod", "", POPT_ARG_STRING, nil, OPT_CHMOD},
 		{"ignore-times", "I", POPT_ARG_NONE, &o.ignore_times, 0},
-		//{"size-only", "", POPT_ARG_NONE, &o.size_only, 0},
-		//{"one-file-system", "x", POPT_ARG_NONE, nil, 'x'},
-		//{"no-one-file-system", "", POPT_ARG_VAL, &o.one_file_system, 0},
-		//{"no-x", "", POPT_ARG_VAL, &o.one_file_system, 0},
+		{"size-only", "", POPT_ARG_NONE, &o.size_only, 0},
+		{"one-file-system", "x", POPT_ARG_NONE, nil, 'x'},
+		{"no-one-file-system", "", POPT_ARG_VAL, &o.one_file_system, 0},
+		{"no-x", "", POPT_ARG_VAL, &o.one_file_system, 0},
 		{"update", "u", POPT_ARG_NONE, &o.update_only, 0},
-		//{"existing", "", POPT_ARG_NONE, &o.ignore_non_existing, 0},
+		{"existing", "", POPT_ARG_NONE, &o.ignore_non_existing, 0},
 		//{"ignore-non-existing", "", POPT_ARG_NONE, &o.ignore_non_existing, 0},
-		//{"ignore-existing", "", POPT_ARG_NONE, &o.ignore_existing, 0},
-		//{"max-size", "", POPT_ARG_STRING, &o.max_size_arg, OPT_MAX_SIZE},
-		//{"min-size", "", POPT_ARG_STRING, &o.min_size_arg, OPT_MIN_SIZE},
+		{"ignore-existing", "", POPT_ARG_NONE, &o.ignore_existing, 0},
+		{"max-size", "", POPT_ARG_STRING, &o.max_size_arg, OPT_MAX_SIZE},
+		{"min-size", "", POPT_ARG_STRING, &o.min_size_arg, OPT_MIN_SIZE},
 		//{"max-alloc", "", POPT_ARG_STRING, &o.max_alloc_arg, 0},
 		{"sparse", "S", POPT_ARG_VAL, &o.sparse_files, 1},
 		{"no-sparse", "", POPT_ARG_VAL, &o.sparse_files, 0},
@@ -1083,13 +1126,13 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"delete-excluded", "", POPT_ARG_NONE, &o.delete_excluded, 0},
 		//{"delete-missing-args", "", POPT_BIT_SET, &o.missing_args, 2},
 		//{"ignore-missing-args", "", POPT_BIT_SET, &o.missing_args, 1},
-		//{"remove-sent-files", "", POPT_ARG_VAL, &o.remove_source_files, 2}, /* deprecated */
-		//{"remove-source-files", "", POPT_ARG_VAL, &o.remove_source_files, 1},
-		//{"force", "", POPT_ARG_VAL, &o.force_delete, 1},
-		//{"no-force", "", POPT_ARG_VAL, &o.force_delete, 0},
-		//{"ignore-errors", "", POPT_ARG_VAL, &o.ignore_errors, 1},
+		{"remove-sent-files", "", POPT_ARG_VAL, &o.remove_source_files, 2}, /* deprecated */
+		{"remove-source-files", "", POPT_ARG_VAL, &o.remove_source_files, 1},
+		{"force", "", POPT_ARG_VAL, &o.force_delete, 1},
+		{"no-force", "", POPT_ARG_VAL, &o.force_delete, 0},
+		{"ignore-errors", "", POPT_ARG_VAL, &o.ignore_errors, 1},
 		//{"no-ignore-errors", "", POPT_ARG_VAL, &o.ignore_errors, 0},
-		//{"max-delete", "", POPT_ARG_INT, &o.max_delete, 0},
+		{"max-delete", "", POPT_ARG_INT, &o.max_delete, 0},
 		//{"", "F", POPT_ARG_NONE, nil, 'F'},
 		{"filter", "f", POPT_ARG_STRING, nil, OPT_FILTER},
 		{"exclude", "", POPT_ARG_STRING, nil, OPT_EXCLUDE},
@@ -1168,13 +1211,13 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"protect-args", "", POPT_ARG_VAL, &o.protect_args, 1},
 		//{"no-protect-args", "", POPT_ARG_VAL, &o.protect_args, 0},
 		//{"no-s", "", POPT_ARG_VAL, &o.protect_args, 0},
-		//{"numeric-ids", "", POPT_ARG_VAL, &o.numeric_ids, 1},
-		//{"no-numeric-ids", "", POPT_ARG_VAL, &o.numeric_ids, 0},
+		{"numeric-ids", "", POPT_ARG_VAL, &o.numeric_ids, 1},
+		{"no-numeric-ids", "", POPT_ARG_VAL, &o.numeric_ids, 0},
 		//{"usermap", "", POPT_ARG_STRING, nil, OPT_USERMAP},
 		//{"groupmap", "", POPT_ARG_STRING, nil, OPT_GROUPMAP},
 		//{"chown", "", POPT_ARG_STRING, nil, OPT_CHOWN},
-		//{"timeout", "", POPT_ARG_INT, &o.io_timeout, 0},
-		//{"no-timeout", "", POPT_ARG_VAL, &o.io_timeout, 0},
+		{"timeout", "", POPT_ARG_INT, &o.io_timeout, 0},
+		{"no-timeout", "", POPT_ARG_VAL, &o.io_timeout, 0},
 		{"contimeout", "", POPT_ARG_INT, &o.connect_timeout, 0},
 		{"no-contimeout", "", POPT_ARG_VAL, &o.connect_timeout, 0},
 		{"fsync", "", POPT_ARG_NONE, &o.do_fsync, 0},
@@ -1191,7 +1234,7 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"8-bit-output", "8", POPT_ARG_VAL, &o.allow_8bit_chars, 1},
 		//{"no-8-bit-output", "", POPT_ARG_VAL, &o.allow_8bit_chars, 0},
 		//{"no-8", "", POPT_ARG_VAL, &o.allow_8bit_chars, 0},
-		//{"mkpath", "", POPT_ARG_VAL, &o.mkpath_dest_arg, 1},
+		{"mkpath", "", POPT_ARG_VAL, &o.mkpath_dest_arg, 1},
 		//{"no-mkpath", "", POPT_ARG_VAL, &o.mkpath_dest_arg, 0},
 		//{"qsort", "", POPT_ARG_NONE, &o.use_qsort, 0},
 		//{"copy-as", "", POPT_ARG_STRING, &o.copy_as, 0},
@@ -1677,10 +1720,24 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 			}
 			opts.block_size = int32(size)
 
-		case OPT_MAX_SIZE, // (needs parse_size_arg)
-			OPT_MIN_SIZE,
-			OPT_BWLIMIT:
+		case OPT_MAX_SIZE, OPT_MIN_SIZE:
+			// rsync/options.c: passed on as plain bytes.
+			arg, name, size := &opts.max_size_arg, "max-size", &opts.max_size
+			if opt == OPT_MIN_SIZE {
+				arg, name, size = &opts.min_size_arg, "min-size", &opts.min_size
+			}
+			n, err := parseSizeArg(*arg, 'b', name, 0, -1, false)
+			if err != nil {
+				return err
+			}
+			*size, *arg = n, strconv.FormatInt(n, 10)
+
+		case OPT_BWLIMIT:
 			return errNotYetImplemented
+
+		case OPT_MODIFY_WINDOW:
+			// rsync/options.c: passed on only when given.
+			opts.modify_window_set = true
 
 		case OPT_APPEND:
 			// rsync/options.c: a second --append means --append-verify, which

@@ -62,6 +62,7 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 		if err := rt.recvFile1(fileList[idx]); err != nil {
 			return err
 		}
+		rt.fileDone(int(idx))
 	}
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_RECV, 1) {
 		rt.Logger.Printf("recvFiles finished")
@@ -313,7 +314,7 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		return err
 	}
 
-	if err := rt.setPerms(f, perm); err != nil {
+	if err := rt.setPermsAccurate(f, perm); err != nil {
 		return err
 	}
 

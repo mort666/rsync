@@ -321,6 +321,15 @@ func clientTrace(osenv *rsyncos.Env, opts *rsyncopts.Options) *rsyncwire.Trace {
 func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, paths []string, remoteProtocol int32, hooks ClientHooks) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
 	conn, stop := rsyncwire.WrapCtx(ctx, conn)
 	defer stop()
+	if n := opts.IOTimeoutSeconds(); n > 0 {
+		idle := rsyncwire.NewIdleTimeout(n, conn)
+		defer idle.Stop()
+		conn = struct {
+			io.Reader
+			io.Writer
+			io.Closer
+		}{idle.Reader(conn), idle.Writer(conn), conn}
+	}
 	trace := clientTrace(osenv, opts)
 	conn = trace.Wrap(conn)
 	crd := &rsyncwire.CountingReader{R: conn}
@@ -399,8 +408,9 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	c.Reader = crd
 
 	// From protocol 30 the client multiplexes its output too
-	// (need_messages_from_generator), from right after the seed.
-	if c.Session.Protocol >= 30 {
+	// (need_messages_from_generator), from right after the seed, and at
+	// any protocol with --remove-source-files, for MSG_SUCCESS.
+	if c.Session.Protocol >= 30 || opts.RemoveSourceFiles() {
 		mpx := &rsyncwire.MultiplexWriter{Writer: cwr, Trace: trace}
 		cwr = &rsyncwire.CountingWriter{W: mpx, BytesWritten: cwr.BytesWritten}
 		c.Writer = cwr
@@ -490,6 +500,18 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			MungeLinks:        opts.MungeLinks(),
 			BasisDirs:         opts.BasisDirs(),
 			AltDest:           opts.AltDestType(),
+			ModifyWindow:      opts.ModifyWindow(),
+			SizeOnly:          opts.SizeOnly(),
+			IgnoreNonExisting: opts.IgnoreNonExisting(),
+			IgnoreExisting:    opts.IgnoreExisting(),
+			UpdateOnly:        opts.UpdateOnly(),
+			MaxSize:           opts.MaxSize(),
+			MinSize:           opts.MinSize(),
+			Force:             opts.Force(),
+			IgnoreErrors:      opts.IgnoreErrors(),
+			MaxDelete:         opts.MaxDelete(),
+			NumericIds:        opts.NumericIds(),
+			RemoveSourceFiles: opts.RemoveSourceFiles(),
 			PreservePerms:     opts.PreservePerms(),
 			PreserveDevices:   opts.PreserveDevices(),
 			PreserveSpecials:  opts.PreserveSpecials(),

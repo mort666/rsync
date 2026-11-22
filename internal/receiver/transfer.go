@@ -3,6 +3,7 @@ package receiver
 import (
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"sync"
 
@@ -43,11 +44,40 @@ type TransferOpts struct {
 
 	// BasisDirs are the alternate folders of --compare-dest, --copy-dest
 	// or --link-dest, which AltDest names (rsyncopts.CompareDest, ...).
-	BasisDirs      []string
-	AltDest        int
-	IgnoreTimes    bool
-	AlwaysChecksum bool
-	WholeFile      bool
+	BasisDirs []string
+	AltDest   int
+
+	// ModifyWindow is --modify-window (see modTimeEqual).
+	ModifyWindow int
+
+	// Which files the generator leaves alone: --size-only compares sizes
+	// alone, --existing skips what the destination lacks,
+	// --ignore-existing what it has, -u what is newer there, and
+	// --max-size and --min-size (-1 for none) regular files by size.
+	SizeOnly          bool
+	IgnoreNonExisting bool
+	IgnoreExisting    bool
+	UpdateOnly        bool
+	MaxSize           int64
+	MinSize           int64
+
+	// Force removes a folder that is in a file's way with what it holds
+	// (--force). IgnoreErrors deletes despite I/O errors on the sending
+	// side (--ignore-errors). MaxDelete caps deletions (--max-delete),
+	// NoMaxDelete for none.
+	Force        bool
+	IgnoreErrors bool
+	MaxDelete    int
+
+	// NumericIds is --numeric-ids: no name lists, ids as sent.
+	NumericIds bool
+
+	// RemoveSourceFiles tells the sender each file this side has
+	// (MSG_SUCCESS), so that it removes its copy.
+	RemoveSourceFiles bool
+	IgnoreTimes       bool
+	AlwaysChecksum    bool
+	WholeFile         bool
 
 	// PreserveXattrs is how many -X were given (see
 	// rsyncopts.Options.PreserveXattrs).
@@ -193,3 +223,6 @@ func (rt *Transfer) closeDecoder() {
 func (rt *Transfer) strong() rsyncchecksum.Strong {
 	return rsyncchecksum.NewStrong(rt.Conn.Session, rt.Seed)
 }
+
+// NoMaxDelete is TransferOpts.MaxDelete without --max-delete.
+const NoMaxDelete = math.MinInt32

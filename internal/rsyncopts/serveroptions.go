@@ -107,8 +107,10 @@ func (o *Options) ServerOptions() []string {
 	}
 	// if (relative_paths)
 	// 	argstr[x++] = 'R';
-	// if (one_file_system)
-	// 	argstr[x++] = 'x';
+	// One x per -x, up to two.
+	for i := 0; i < o.one_file_system && i < 2; i++ {
+		argstr += "x"
+	}
 	if o.SparseFiles() {
 		argstr += "S"
 	}
@@ -182,11 +184,9 @@ func (o *Options) ServerOptions() []string {
 	// 	args[ac++] = arg;
 	// }
 
-	// if (io_timeout) {
-	// 	if (asprintf(&arg, "--timeout=%d", io_timeout) < 0)
-	// 		goto oom;
-	// 	args[ac++] = arg;
-	// }
+	if o.io_timeout != 0 {
+		sargv = append(sargv, fmt.Sprintf("--timeout=%d", o.io_timeout))
+	}
 
 	// if (bwlimit) {
 	// 	if (asprintf(&arg, "--bwlimit=%d", bwlimit) < 0)
@@ -216,11 +216,9 @@ func (o *Options) ServerOptions() []string {
 	// if (size_only)
 	// 	args[ac++] = "--size-only";
 
-	// if (modify_window_set) {
-	// 	if (asprintf(&arg, "--modify-window=%d", modify_window) < 0)
-	// 		goto oom;
-	// 	args[ac++] = arg;
-	// }
+	if o.modify_window_set {
+		sargv = append(sargv, fmt.Sprintf("--modify-window=%d", o.modify_window))
+	}
 
 	if o.inplace != 0 {
 		sargv = append(sargv, "--inplace")
@@ -250,12 +248,46 @@ func (o *Options) ServerOptions() []string {
 	// if (ignore_errors)
 	// 	args[ac++] = "--ignore-errors";
 
+	// What a receiving server decides by (options.c:server_options).
+	if o.Sender() {
+		if n := o.MaxDelete(); n > 0 {
+			sargv = append(sargv, fmt.Sprintf("--max-delete=%d", n))
+		} else if n == 0 {
+			sargv = append(sargv, "--max-delete=-1")
+		}
+		if o.Force() {
+			sargv = append(sargv, "--force")
+		}
+		if o.min_size >= 0 {
+			sargv = append(sargv, "--min-size="+o.min_size_arg)
+		}
+		if o.max_size >= 0 {
+			sargv = append(sargv, "--max-size="+o.max_size_arg)
+		}
+		if o.SizeOnly() {
+			sargv = append(sargv, "--size-only")
+		}
+		if o.IgnoreExisting() {
+			sargv = append(sargv, "--ignore-existing")
+		}
+		if o.IgnoreNonExisting() {
+			sargv = append(sargv, "--existing")
+		}
+	}
 	// Only a receiving server needs the alternate folders
 	// (options.c:server_options).
 	if o.Sender() {
 		for _, dir := range o.basis_dirs {
 			sargv = append(sargv, AltDestOption(o.alt_dest_type), dir)
 		}
+	}
+	if o.remove_source_files == 1 {
+		sargv = append(sargv, "--remove-source-files")
+	} else if o.remove_source_files != 0 {
+		sargv = append(sargv, "--remove-sent-files")
+	}
+	if o.IgnoreErrors() {
+		sargv = append(sargv, "--ignore-errors")
 	}
 	if o.CopyUnsafeLinks() {
 		sargv = append(sargv, "--copy-unsafe-links")
@@ -264,8 +296,9 @@ func (o *Options) ServerOptions() []string {
 		sargv = append(sargv, "--safe-links")
 	}
 
-	// if (numeric_ids)
-	// 	args[ac++] = "--numeric-ids";
+	if o.NumericIds() {
+		sargv = append(sargv, "--numeric-ids")
+	}
 
 	// if (only_existing && am_sender)
 	// 	args[ac++] = "--existing";

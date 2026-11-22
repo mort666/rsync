@@ -38,6 +38,10 @@ type Env struct {
 	// (MSG_BLOCK_STATS, protocol 33+), for a sending client's stats.
 	BlockStats atomic.Int64
 
+	// SourceDone, when set, is told each file-list index the receiver
+	// reports done (MSG_SUCCESS), for --remove-source-files.
+	SourceDone func(ndx int32)
+
 	logger log.Logger
 }
 

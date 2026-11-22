@@ -75,6 +75,10 @@ func (st *Transfer) Do(crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWri
 		return flistcmp.Compare(proto, flistcmp.Entry{Name: a.Wpath, IsDir: a.isDir}, flistcmp.Entry{Name: b.Wpath, IsDir: b.isDir}) < 0
 	})
 
+	if st.Opts.RemoveSourceFiles() && st.Env != nil {
+		st.Env.SourceDone = func(ndx int32) { st.removeSource(fileList, ndx) }
+		defer func() { st.Env.SourceDone = nil }()
+	}
 	if err := st.SendFiles(fileList); err != nil {
 		return nil, err
 	}

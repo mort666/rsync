@@ -74,12 +74,13 @@ func (rt *Transfer) matchRegular(root *os.Root, f *File) (basisMatch, fs.FileInf
 		return basisContentDiffers, st
 	}
 	switch {
-	case rt.Opts.AlwaysChecksum:
+	case rt.Opts.AlwaysChecksum && !rt.Opts.SizeOnly:
 		sum, err := rt.strong().RootFileChecksum(root, f.Name)
 		if err != nil || !bytes.Equal(sum, f.Checksum) {
 			return basisContentDiffers, st
 		}
-	case rt.Opts.IgnoreTimes || !modTimeEqual(st.ModTime(), f.ModTime):
+	case rt.Opts.SizeOnly:
+	case rt.Opts.IgnoreTimes || !rt.modTimeEqual(st.ModTime(), f.ModTime):
 		return basisContentDiffers, st
 	}
 	if !rt.unchangedAttrs(root, f, st) {
@@ -92,7 +93,7 @@ func (rt *Transfer) matchRegular(root *os.Root, f *File) (basisMatch, fs.FileInf
 // attributes this receiver would give f.
 func (rt *Transfer) unchangedAttrs(root *os.Root, f *File, st fs.FileInfo) bool {
 	isLink := f.Mode&rsync.S_IFMT == rsync.S_IFLNK
-	if rt.Opts.PreserveTimes && !modTimeEqual(st.ModTime(), f.ModTime) {
+	if rt.Opts.PreserveTimes && !rt.modTimeEqual(st.ModTime(), f.ModTime) {
 		return false
 	}
 	if !isLink && rt.Opts.PreservePerms && goModeBits(st.Mode()) != uint32(f.Mode)&0o7777 {
@@ -220,7 +221,7 @@ func (rt *Transfer) copyFromBasis(root *os.Root, f *File, perm fs.FileMode) erro
 	if err := out.CloseAtomicallyReplace(); err != nil {
 		return err
 	}
-	return rt.setPerms(f, perm)
+	return rt.setPermsAccurate(f, perm)
 }
 
 // tryDestsNon is try_dests_non for a symlink, device or special f the

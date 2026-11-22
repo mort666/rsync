@@ -28,10 +28,23 @@ func isTopDir(f *File) bool {
 }
 
 func (rt *Transfer) deleteFiles(fileList []*File) error {
-	if rt.IOErrors > 0 {
-		rt.Logger.Printf("IO error encountered, skipping file deletion")
+	if rt.IOErrors > 0 && !rt.Opts.IgnoreErrors {
+		rt.info("IO error encountered -- skipping file deletion\n")
 		return nil
 	}
+	// --max-delete: how many more entries may go, below 0 none.
+	limited, left, skipped := rt.Opts.MaxDelete != NoMaxDelete, int64(rt.Opts.MaxDelete), int64(0)
+	defer func() {
+		if skipped > 0 {
+			msg := fmt.Sprintf("Deletions stopped due to --max-delete limit (%d skipped)\n", skipped)
+			rt.Logger.Printf("%s", msg)
+			if rt.TellClient != nil {
+				rt.TellClient(rsyncwire.MsgWarning, msg)
+			} else if rt.Env != nil {
+				rt.Env.XferErrors.Add(1)
+			}
+		}
+	}()
 
 	// fs.WalkDir names paths with forward slashes; f.Name is a local path,
 	// with backslashes on Windows, where comparing the two as they are
@@ -40,58 +53,77 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 	for _, f := range fileList {
 		inList[filepath.ToSlash(f.Name)] = true
 	}
+
+	// deleteItem removes path, which the sender does not have.
+	deleteItem := func(path string, info fs.DirEntry) {
+		if rt.Excluded != nil && rt.Excluded(path) {
+			if rt.Opts.Verbose {
+				rt.Logger.Printf("  protecting %s (filter rule)", path)
+			}
+			return
+		}
+		if rt.Opts.Verbose {
+			rt.Logger.Printf("  deleting %s", path)
+		}
+		counted := rt.delStats
+		rt.countDeleted(path, info)
+		if limited {
+			n := rt.delStats.Total() - counted.Total()
+			if n > max(left, 0) {
+				rt.delStats = counted
+				skipped += n
+				return
+			}
+			left -= n
+		}
+		if rt.Opts.DryRun {
+			return
+		}
+		if err := rt.DestRoot.RemoveAll(path); err != nil {
+			rt.delStats = counted
+			rt.Logger.Printf("  deleting %s failed: %v", path, err)
+			// Keep going, as rsync does; the error fails the run
+			// (rsync/delete.c delete_item, FERROR_XFER).
+			rt.deleteFailed(path, err)
+		}
+	}
+
+	// Each folder's extra entries go last name first, as rsync's
+	// delete_in_dir takes them, and then the folders that stay, in order.
+	// The order matters to which go under --max-delete.
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		rt.Logger.Printf("WalkDir(%q)", dir)
+		entries, err := fs.ReadDir(rt.DestRoot.FS(), dir)
+		if err != nil {
+			return err
+		}
+		join := func(name string) string {
+			if dir == "." {
+				return name
+			}
+			return dir + "/" + name
+		}
+		for i := len(entries) - 1; i >= 0; i-- {
+			if path := join(entries[i].Name()); !inList[path] {
+				deleteItem(path, entries[i])
+			}
+		}
+		for _, e := range entries {
+			if path := join(e.Name()); e.IsDir() && inList[path] {
+				if err := walk(path); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
 	for _, f := range fileList {
 		if !isTopDir(f) {
 			continue
 		}
 		rt.Logger.Printf("deleting in %s", f.Name)
-		// Other rsync implementations generate a local file list and compare it
-		// with the remote file list, we re-implement the path→name mapping part
-		// of file list generation here. We could change it for consistency.
-		err := fs.WalkDir(rt.DestRoot.FS(), ".", func(path string, info fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rt.Logger.Printf("WalkDir(%q)", path)
-			if inList[path] {
-				return nil
-			}
-			if rt.Excluded != nil && rt.Excluded(path) {
-				if rt.Opts.Verbose {
-					rt.Logger.Printf("  protecting %s (filter rule)", path)
-				}
-				if info.IsDir() {
-					// What an excluded folder holds is protected too:
-					// rsync does not go into it.
-					return fs.SkipDir
-				}
-				return nil
-			}
-			if rt.Opts.Verbose {
-				rt.Logger.Printf("  deleting %s", path)
-			}
-			if rt.Opts.DryRun {
-				rt.countDeleted(path, info)
-				if info.IsDir() {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			counted := rt.delStats
-			rt.countDeleted(path, info)
-			if err := rt.DestRoot.RemoveAll(path); err != nil {
-				rt.delStats = counted
-				rt.Logger.Printf("  deleting %s failed: %v", path, err)
-				// Keep going, as rsync does; the error fails the run
-				// (rsync/delete.c delete_item, FERROR_XFER).
-				rt.deleteFailed(path, err)
-			}
-			if info.IsDir() {
-				return fs.SkipDir // skip the just-deleted directory
-			}
-			return nil
-		})
-		if err != nil {
+		if err := walk("."); err != nil {
 			if os.IsNotExist(err) {
 				return nil // destination does not exist, nothing to do
 			}
