@@ -221,7 +221,9 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	if opts.DebugGTE(rsyncopts.DEBUG_FLIST, 1) {
 		logger.Printf("isDir=%v, xferDirs=%v", info.Mode().IsDir(), opts.XferDirs())
 	}
-	if info.Mode().IsDir() && opts.XferDirs() == 0 {
+	// d, not info, says whether WalkDir would descend: under --fake-super
+	// info has the mode from %stat.
+	if d.IsDir() && opts.XferDirs() == 0 {
 		logger.Printf("skipping directory %s", path)
 		return filepath.SkipDir
 	}
@@ -246,7 +248,10 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	}
 
 	if s.excl.matches(name) {
-		return filepath.SkipDir
+		if d.IsDir() {
+			return filepath.SkipDir // skip the excluded folder
+		}
+		return nil // SkipDir on a file would skip the rest of its folder
 	}
 
 	s.fileList.Files = append(s.fileList.Files, file{
@@ -565,7 +570,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	// slash, or ".", goes with its own entries, one level deep; it is the
 	// only entry sent as ".". Any other folder goes as an entry only.
 	// (rsync flist.c send_file_list: SLASH_ENDING_NAME, DOTDIR_NAME.)
-	if info.Mode().IsDir() && !opts.Recurse() && name != "." {
+	if d.IsDir() && !opts.Recurse() && name != "." {
 		return filepath.SkipDir
 	}
 

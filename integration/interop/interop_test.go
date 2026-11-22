@@ -531,6 +531,12 @@ func TestInteropSubdirExclude(t *testing.T) {
 
 	_, source, dest := createSourceFiles(t)
 
+	// create a file to be excluded, which sorts before cheap/dummy
+	credentials := filepath.Join(source, "cheap", "credentials")
+	if err := os.WriteFile(credentials, []byte("credentials"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	// start a server to sync from
 	srv := rsynctest.New(t, rsynctest.InteropModule(source))
 
@@ -546,6 +552,7 @@ func TestInteropSubdirExclude(t *testing.T) {
 				// for using --exclude like so:
 				//"--exclude=dummy",
 				"-f", "- expensive",
+				"-f", "- credentials",
 				"-v", "-v", "-v", "-v",
 				"--port=" + srv.Port,
 			}, "rsync://localhost/interop/"),
@@ -560,6 +567,10 @@ func TestInteropSubdirExclude(t *testing.T) {
 	expensiveFn := filepath.Join(dest, "expensive", "dummy")
 	if _, err := os.ReadFile(expensiveFn); !os.IsNotExist(err) {
 		t.Fatalf("ReadFile(%s) did not return -ENOENT, but %v", expensiveFn, err)
+	}
+	credentialsFn := filepath.Join(dest, "cheap", "credentials")
+	if _, err := os.ReadFile(credentialsFn); !os.IsNotExist(err) {
+		t.Fatalf("ReadFile(%s) did not return -ENOENT, but %v", credentialsFn, err)
 	}
 	cheapFn := filepath.Join(dest, "cheap", "dummy")
 	if _, err := os.ReadFile(cheapFn); err != nil {
