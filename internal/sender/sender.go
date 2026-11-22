@@ -317,27 +317,16 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 			}
 			return err
 		}
-		// chunk size (“rawtok” variable in openrsync); split into wire tokens
-		// no larger than rsync.ChunkSize, which the receiver caps at rsync's
-		// CHUNK_SIZE.
-		data := buf[:n]
-		for len(data) > 0 {
-			m := min(len(data), rsync.ChunkSize)
-			if err := st.Conn.WriteInt32(int32(m)); err != nil {
-				return err
-			}
-			if _, err := st.Conn.Writer.Write(data[:m]); err != nil {
-				return err
-			}
-			data = data[m:]
-			offset += int64(m)
+		if err := st.sendLiteral(buf[:n]); err != nil {
+			return err
 		}
+		offset += int64(n)
 	}
 	if st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
 		st.Progress.Show(uint64(offset), true)
 	}
 	// transfer finished:
-	if err := st.Conn.WriteInt32(0); err != nil {
+	if err := st.endFile(); err != nil {
 		return err
 	}
 

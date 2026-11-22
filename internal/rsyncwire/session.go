@@ -41,6 +41,11 @@ type Session struct {
 	// differ with --checksum-choice=xfer,file.
 	Checksum     string
 	FileChecksum string
+
+	// Compress is the compressor for file data (see rsynctoken.Names), or
+	// "" for none. CompressLevel is its level.
+	Compress      string
+	CompressLevel int
 }
 
 // Compat flags (compat.c), which a server sends from protocol 30. It picks

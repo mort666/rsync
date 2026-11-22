@@ -9,6 +9,7 @@ import (
 	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
+	"github.com/gokrazy/rsync/internal/rsynctoken"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
 )
 
@@ -96,6 +97,7 @@ type Transfer struct {
 	Groups       map[int32]mapping
 	defaultPerms fs.FileMode
 	retouchDirs  []retouchDir
+	dec          rsynctoken.Decoder // see decoder
 }
 
 type retouchDir struct {
@@ -104,6 +106,19 @@ type retouchDir struct {
 }
 
 func (rt *Transfer) listOnly() bool { return rt.Dest == "" }
+
+// decoder is the session's token decoder, made on first use: it keeps the
+// compressor's state from file to file.
+func (rt *Transfer) decoder() (rsynctoken.Decoder, error) {
+	if rt.dec == nil {
+		dec, err := rsynctoken.NewDecoder(rt.Conn.Session, rt.Conn.Reader)
+		if err != nil {
+			return nil, err
+		}
+		rt.dec = dec
+	}
+	return rt.dec, nil
+}
 
 // strong is the session's strong checksum (MD4 or MD5, seeded).
 func (rt *Transfer) strong() rsyncchecksum.Strong {

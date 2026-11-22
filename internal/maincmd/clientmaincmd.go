@@ -20,6 +20,7 @@ import (
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsyncstats"
+	"github.com/gokrazy/rsync/internal/rsynctoken"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
 	"github.com/gokrazy/rsync/internal/sender"
 	"github.com/google/shlex"
@@ -349,6 +350,12 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	}
 	if opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {
 		osenv.Logf("Client checksum: %s", rsyncchecksum.NewStrong(c.Session, 0).Name())
+	}
+	if err := rsynctoken.Negotiate(c, opts.CompressChoice(), opts.CompressLevel(), false, opts.Sender()); err != nil {
+		return nil, nil, err
+	}
+	if c.Session.Compress != "" && opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {
+		osenv.Logf("Client compress: %s (level %d)", c.Session.Compress, c.Session.CompressLevel)
 	}
 	seed, err := c.ReadInt32()
 	if err != nil {

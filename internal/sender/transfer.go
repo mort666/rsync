@@ -8,6 +8,7 @@ import (
 	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
+	"github.com/gokrazy/rsync/internal/rsynctoken"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
 )
 
@@ -66,7 +67,11 @@ type Transfer struct {
 
 	// attrs are the item attributes the generator sent with the file being
 	// sent, echoed back before its data (protocol 29+).
-	attrs     rsyncwire.ItemAttrs
+	attrs rsyncwire.ItemAttrs
+
+	enc    rsynctoken.Encoder // see encoder
+	litBuf []byte             // see sendToken
+
 	Conn      *rsyncwire.Conn
 	Seed      int32
 	lastMatch int64

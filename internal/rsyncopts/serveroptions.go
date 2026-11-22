@@ -1,6 +1,10 @@
 package rsyncopts
 
-import "github.com/gokrazy/rsync/internal/rsyncwire"
+import (
+	"fmt"
+
+	"github.com/gokrazy/rsync/internal/rsyncwire"
+)
 
 func (o *Options) CommandOptions(path string, paths ...string) []string {
 	return append(o.ServerOptions(), append([]string{".", path}, paths...)...)
@@ -90,8 +94,12 @@ func (o *Options) ServerOptions() []string {
 	if o.SparseFiles() {
 		argstr += "S"
 	}
-	// if (do_compression)
-	// 	argstr[x++] = 'z';
+	// rsync sends z for zlib, or for a compressor still to be negotiated;
+	// other choices go as long options below.
+	compress := o.CompressChoice()
+	if compress == "auto" || compress == "zlib" {
+		argstr += "z"
+	}
 
 	if o.xfer_dirs > 0 && !o.Recurse() {
 		argstr += "d"
@@ -117,6 +125,22 @@ func (o *Options) ServerOptions() []string {
 
 	if o.checksum_choice != "" {
 		sargv = append(sargv, "--checksum-choice="+o.checksum_choice)
+	}
+
+	// options.c:server_options
+	if compress != "" && o.CompressLevel() >= 0 {
+		sargv = append(sargv, fmt.Sprintf("--compress-level=%d", o.CompressLevel()))
+	}
+	switch {
+	case compress == "zlibx":
+		sargv = append(sargv, "--new-compress")
+	case compress == "zlib" && o.compress_choice != "":
+		sargv = append(sargv, "--old-compress")
+	case compress != "" && compress != "auto" && compress != "zlib":
+		sargv = append(sargv, "--compress-choice="+compress)
+	}
+	if !o.Sender() && o.skip_compress != "" {
+		sargv = append(sargv, "--skip-compress="+o.skip_compress)
 	}
 
 	if o.Sender() && o.DoFsync() {

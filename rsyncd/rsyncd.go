@@ -27,6 +27,7 @@ import (
 	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
+	"github.com/gokrazy/rsync/internal/rsynctoken"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
 	"github.com/gokrazy/rsync/internal/sender"
 	"github.com/mmcloughlin/md4"
@@ -318,7 +319,13 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	s.logger.Printf("flags: %+v", flags)
 	osenv := &rsyncos.Env{Stderr: s.stderr}
 	pc := rsyncopts.NewContext(rsyncopts.NewOptionsWithGokrazyDefaults(osenv))
-	if err := pc.ParseArguments(osenv, flags); err != nil {
+	err = pc.ParseArguments(osenv, flags)
+	if err == nil {
+		// Refuse what this server cannot do before the protocol starts,
+		// so the client hears why.
+		err = rsynctoken.CheckChoice(pc.Options.CompressChoice(), pc.Options.Sender())
+	}
+	if err != nil {
 		err = fmt.Errorf("parsing server args: %v", err)
 
 		// terminate connection with an error about which flag is not supported
@@ -467,6 +474,12 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 	}
 	if opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {
 		s.logger.Printf("Server checksum: %s", rsyncchecksum.NewStrong(c.Session, 0).Name())
+	}
+	if err := rsynctoken.Negotiate(c, opts.CompressChoice(), opts.CompressLevel(), true, opts.Sender()); err != nil {
+		return err
+	}
+	if c.Session.Compress != "" && opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {
+		s.logger.Printf("Server compress: %s (level %d)", c.Session.Compress, c.Session.CompressLevel)
 	}
 	if err := c.WriteInt32(sessionChecksumSeed); err != nil {
 		return err

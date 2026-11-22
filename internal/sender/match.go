@@ -271,7 +271,11 @@ func (st *Transfer) matched(h hash.Hash, ms *mapStruct, head rsync.SumHead, offs
 	}
 	*/
 
-	if err := st.sendToken(ms, i, st.lastMatch, n); err != nil {
+	var blockLen int64
+	if !transmitAccumulated {
+		blockLen = head.Sums[i].Len
+	}
+	if err := st.sendToken(ms, i, st.lastMatch, n, offset, blockLen); err != nil {
 		return fmt.Errorf("sendToken: %v", err)
 	}
 	// TODO: data_transfer += n;

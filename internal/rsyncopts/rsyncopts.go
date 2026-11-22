@@ -780,6 +780,36 @@ func (o *Options) FilterRules() []string { return o.filterRules }
 // ChecksumChoice is --checksum-choice: "xfer" or "xfer,file", or "".
 func (o *Options) ChecksumChoice() string { return o.checksum_choice }
 
+// CompressChoice is the compressor the options ask for, settled as
+// options.c does before negotiation: "" for none, "auto" to negotiate
+// (-z, or --compress-level alone), or a name (--compress-choice, which
+// turns compression on by itself; -zz and --new-compress mean zlibx,
+// --old-compress zlib).
+func (o *Options) CompressChoice() string {
+	choice := strings.ToLower(o.compress_choice)
+	if choice == "" && o.do_compression > 1 {
+		choice = "zlibx"
+	}
+	switch choice {
+	case "none":
+		return ""
+	case "", "auto":
+		if o.do_compression > 0 || o.do_compression_level != math.MinInt32 {
+			return "auto"
+		}
+		return ""
+	}
+	return choice
+}
+
+// CompressLevel is --compress-level, or -1 when it was not given.
+func (o *Options) CompressLevel() int {
+	if o.do_compression_level == math.MinInt32 {
+		return -1
+	}
+	return max(o.do_compression_level, 0)
+}
+
 // ProtocolVersion is the protocol version this side announces:
 // rsyncwire.MaxProtocolVersion unless --protocol asked for another.
 func (o *Options) ProtocolVersion() int32 { return int32(o.protocol_version) }
@@ -1007,19 +1037,16 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"no-fuzzy", "", POPT_ARG_VAL, &o.fuzzy_basis, 0},
 		//{"no-y", "", POPT_ARG_VAL, &o.fuzzy_basis, 0},
 
-		// Regarding compression support, see:
-		// https://github.com/gokrazy/rsync/issues/35#issuecomment-2988582190
-		//
-		//{"compress", "z", POPT_ARG_NONE, nil, 'z'},
-		//{"old-compress", "", POPT_ARG_NONE, nil, OPT_OLD_COMPRESS},
-		//{"new-compress", "", POPT_ARG_NONE, nil, OPT_NEW_COMPRESS},
-		//{"no-compress", "", POPT_ARG_NONE, nil, OPT_NO_COMPRESS},
-		//{"no-z", "", POPT_ARG_NONE, nil, OPT_NO_COMPRESS},
-		//{"compress-choice", "", POPT_ARG_STRING, &o.compress_choice, 0},
-		//{"zc", "", POPT_ARG_STRING, &o.compress_choice, 0},
-		//{"skip-compress", "", POPT_ARG_STRING, &o.skip_compress, 0},
-		//{"compress-level", "", POPT_ARG_INT, &o.do_compression_level, 0},
-		//{"zl", "", POPT_ARG_INT, &o.do_compression_level, 0},
+		{"compress", "z", POPT_ARG_NONE, nil, 'z'},
+		{"old-compress", "", POPT_ARG_NONE, nil, OPT_OLD_COMPRESS},
+		{"new-compress", "", POPT_ARG_NONE, nil, OPT_NEW_COMPRESS},
+		{"no-compress", "", POPT_ARG_NONE, nil, OPT_NO_COMPRESS},
+		{"no-z", "", POPT_ARG_NONE, nil, OPT_NO_COMPRESS},
+		{"compress-choice", "", POPT_ARG_STRING, &o.compress_choice, 0},
+		{"zc", "", POPT_ARG_STRING, &o.compress_choice, 0},
+		{"skip-compress", "", POPT_ARG_STRING, &o.skip_compress, 0},
+		{"compress-level", "", POPT_ARG_INT, &o.do_compression_level, 0},
+		{"zl", "", POPT_ARG_INT, &o.do_compression_level, 0},
 
 		{"", "P", POPT_ARG_NONE, nil, 'P'},
 		{"progress", "", POPT_ARG_VAL, &o.do_progress, 1},

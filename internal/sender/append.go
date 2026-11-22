@@ -77,19 +77,10 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 		if n == 0 {
 			break
 		}
-		chunk := buf[:n]
-		h.Write(chunk)
-		// Split into wire tokens no larger than rsync.ChunkSize (rsync's
-		// CHUNK_SIZE); longer literal tokens are rejected by the receiver.
-		for len(chunk) > 0 {
-			m := min(len(chunk), rsync.ChunkSize)
-			if err := st.Conn.WriteInt32(int32(m)); err != nil {
-				return err
-			}
-			if _, err := st.Conn.Writer.Write(chunk[:m]); err != nil {
-				return err
-			}
-			chunk = chunk[m:]
+		h.Write(buf[:n])
+		// Only literal data: see above.
+		if err := st.sendLiteral(buf[:n]); err != nil {
+			return err
 		}
 		offset += int64(n)
 	}
@@ -97,7 +88,7 @@ func (st *Transfer) sendFileAppend(head rsync.SumHead, fileIndex int32, fl file)
 		st.Progress.Show(uint64(offset), true)
 	}
 
-	if err := st.Conn.WriteInt32(0); err != nil {
+	if err := st.endFile(); err != nil {
 		return err
 	}
 

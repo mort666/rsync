@@ -196,13 +196,17 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		}
 		offset = prefix
 	}
+	dec, err := rt.decoder()
+	if err != nil {
+		return err
+	}
 	for {
-		token, err := rt.Conn.ReadInt32()
+		lit, token, err := dec.Next()
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
 			return err
-		}
-		if token == 0 {
-			break
 		}
 		if rt.Opts.Progress && !rt.Opts.Server {
 			rt.Progress.MaybeShow(uint64(offset), false)
@@ -212,37 +216,30 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 				}()
 			}
 		}
-		if token > 0 {
-			// rsync's CHUNK_SIZE is the longest literal token; real rsync
-			// rejects longer ones with this message, and so do we, to stay
-			// protocol conformant and catch a peer that frames literals wrong.
-			if token > rsync.ChunkSize {
-				return fmt.Errorf("invalid uncompressed token length %d", token)
-			}
-			tokenReader := io.LimitReader(rt.Conn.Reader, int64(token))
-			n, err := io.CopyBuffer(wr, tokenReader, buf[:])
-			if err != nil {
+		if lit != nil {
+			if _, err := wr.Write(lit); err != nil {
 				return err
 			}
-			if n != int64(token) {
-				// LimitReader turns a connection closed mid-token into a
-				// short copy without an error.
-				return io.ErrUnexpectedEOF
-			}
-			offset += n
+			offset += int64(len(lit))
 			continue
 		}
 		if localFile == nil {
 			return fmt.Errorf("BUG: local file %s not open for copying chunk", out.Name())
 		}
-		token = -(token + 1)
+		if token >= sh.ChecksumCount {
+			return fmt.Errorf("invalid block index %d (%d blocks) for %s", token, sh.ChecksumCount, out.Name())
+		}
 		offset2 := int64(token) * int64(sh.BlockLength)
 		dataLen := sh.BlockLength
 		if token == sh.ChecksumCount-1 && sh.RemainderLength != 0 {
 			dataLen = sh.RemainderLength
 		}
+		blockWr := wr
+		if see := dec.See(int64(dataLen)); see != nil {
+			blockWr = io.MultiWriter(wr, see)
+		}
 		dataReader := io.NewSectionReader(localFile, offset2, int64(dataLen))
-		n, err := io.CopyBuffer(wr, dataReader, buf[:])
+		n, err := io.CopyBuffer(blockWr, dataReader, buf[:])
 		if err != nil {
 			return err
 		}

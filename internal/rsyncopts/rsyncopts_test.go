@@ -300,3 +300,58 @@ func TestOmitDirTimesServerOptions(t *testing.T) {
 		}
 	}
 }
+
+// The compression options settle as options.c does, and reach the server
+// as rsync sends them (server_options).
+func TestCompressOptions(t *testing.T) {
+	for _, tt := range []struct {
+		args   []string
+		choice string
+		level  int
+		flagZ  bool
+		long   []string
+	}{
+		{args: nil, choice: "", level: -1},
+		{args: []string{"-z"}, choice: "auto", level: -1, flagZ: true},
+		{args: []string{"-zz"}, choice: "zlibx", level: -1, long: []string{"--new-compress"}},
+		{args: []string{"--new-compress"}, choice: "zlibx", level: -1, long: []string{"--new-compress"}},
+		{args: []string{"--old-compress"}, choice: "zlib", level: -1, flagZ: true, long: []string{"--old-compress"}},
+		{args: []string{"--zc=LZ4"}, choice: "lz4", level: -1, long: []string{"--compress-choice=lz4"}},
+		{args: []string{"-z", "--zc=auto"}, choice: "auto", level: -1, flagZ: true},
+		{args: []string{"--zc=auto"}, choice: "", level: -1},
+		{args: []string{"-z", "--zc=none"}, choice: "", level: -1},
+		{args: []string{"-z", "--zl=3"}, choice: "auto", level: 3, flagZ: true, long: []string{"--compress-level=3"}},
+		{args: []string{"--zl=3"}, choice: "auto", level: 3, flagZ: true, long: []string{"--compress-level=3"}},
+		{args: []string{"-z", "--no-z"}, choice: "", level: -1},
+		{args: []string{"-z", "--skip-compress=gz/zip"}, choice: "auto", level: -1, flagZ: true, long: []string{"--skip-compress=gz/zip"}},
+	} {
+		osenv := rsyncostest.New(t)
+		pc := NewContext(NewOptionsWithGokrazyDefaults(osenv))
+		if err := pc.ParseArguments(osenv, append([]string{"-r"}, tt.args...)); err != nil {
+			t.Fatalf("%q: %v", tt.args, err)
+		}
+		o := pc.Options
+		if got := o.CompressChoice(); got != tt.choice {
+			t.Errorf("%q: CompressChoice() = %q, want %q", tt.args, got, tt.choice)
+		}
+		if got := o.CompressLevel(); got != tt.level {
+			t.Errorf("%q: CompressLevel() = %d, want %d", tt.args, got, tt.level)
+		}
+		var flags string
+		var long []string
+		for _, a := range o.ServerOptions() {
+			switch {
+			case strings.Contains(a, "compress"):
+				long = append(long, a)
+			case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--"):
+				flags += a
+			}
+		}
+		if got := strings.Contains(strings.TrimSuffix(flags, "e.fCv"), "z"); got != tt.flagZ {
+			t.Errorf("%q: server flags %q hold z = %v, want %v", tt.args, flags, got, tt.flagZ)
+		}
+		if !slices.Equal(long, tt.long) {
+			t.Errorf("%q: server compression options %q, want %q", tt.args, long, tt.long)
+		}
+	}
+}
