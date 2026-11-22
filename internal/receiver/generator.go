@@ -21,7 +21,13 @@ import (
 func (rt *Transfer) GenerateFiles(fileList []*File) error {
 	phase := 0
 	for idx, f := range fileList {
+		if !rt.listOnly() {
+			rt.genXattr = rt.checkXattrs(f)
+		}
 		if err := rt.recvGenerator(idx, f); err != nil {
+			return err
+		}
+		if err := rt.reportXattrs(idx); err != nil {
 			return err
 		}
 	}
@@ -431,7 +437,12 @@ func (rt *Transfer) requestFile(idx int, iflags uint32, basis byte) error {
 		a.Iflags |= rsync.ITEM_BASIS_TYPE_FOLLOWS
 		a.BasisType = basis
 	}
-	return rt.Conn.WriteNdxAndAttrs(int32(idx), a)
+	req := rt.addXattrRequest(&a)
+	if err := rt.Conn.WriteNdxAndAttrs(int32(idx), a); err != nil {
+		return err
+	}
+	_, err := rt.Conn.Writer.Write(req)
+	return err
 }
 
 // changedFlags are the report flags of rsync's itemize for a regular file

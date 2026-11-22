@@ -19,6 +19,7 @@ import (
 
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
+	"github.com/gokrazy/rsync/internal/rsyncxattr"
 	"github.com/gokrazy/rsync/internal/version"
 )
 
@@ -820,6 +821,19 @@ func (o *Options) CompressLevel() int {
 	return max(o.do_compression_level, 0)
 }
 
+// CheckProtocol reports options the negotiated protocol cannot carry
+// (compat.c:setup_protocol): -X needs protocol 30.
+func (o *Options) CheckProtocol(proto int32) error {
+	if o.preserve_xattrs > 0 && proto < 30 {
+		return fmt.Errorf("--xattrs requires protocol 30 or higher (negotiated %d)", proto)
+	}
+	return nil
+}
+
+// PreserveXattrs is how many -X were given: 1 copies extended attributes,
+// 2 also rsync's own (user.rsync.%stat and the like).
+func (o *Options) PreserveXattrs() int { return o.preserve_xattrs }
+
 // BlockSize is --block-size, or 0 for rsync's choice per file.
 func (o *Options) BlockSize() int32 { return o.block_size }
 
@@ -934,9 +948,9 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"acls", "A", POPT_ARG_NONE, nil, 'A'},
 		//{"no-acls", "", POPT_ARG_VAL, &o.preserve_acls, 0},
 		//{"no-A", "", POPT_ARG_VAL, &o.preserve_acls, 0},
-		//{"xattrs", "X", POPT_ARG_NONE, nil, 'X'},
-		//{"no-xattrs", "", POPT_ARG_VAL, &o.preserve_xattrs, 0},
-		//{"no-X", "", POPT_ARG_VAL, &o.preserve_xattrs, 0},
+		{"xattrs", "X", POPT_ARG_NONE, nil, 'X'},
+		{"no-xattrs", "", POPT_ARG_VAL, &o.preserve_xattrs, 0},
+		{"no-X", "", POPT_ARG_VAL, &o.preserve_xattrs, 0},
 		{"times", "t", POPT_ARG_VAL, &o.preserve_mtimes, 1},
 		{"no-times", "", POPT_ARG_VAL, &o.preserve_mtimes, 0},
 		{"no-t", "", POPT_ARG_VAL, &o.preserve_mtimes, 0},
@@ -1665,6 +1679,13 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 			return fmt.Errorf("ACLs are not supported by gokrazy/rsync")
 
 		case 'X':
+			if !rsyncxattr.Supported {
+				side := "client"
+				if opts.am_server != 0 {
+					side = "server"
+				}
+				return fmt.Errorf("extended attributes are not supported on this %s", side)
+			}
 			opts.preserve_xattrs++
 
 		case OPT_STOP_AFTER,

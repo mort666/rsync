@@ -49,6 +49,10 @@ type File struct {
 	// major number (protocol 28+) and the last hard-linked file's device.
 	rdevMajor uint32
 	hlinkDev  int64
+
+	// xattrList is the index of the entry's xattr list (-X), plus one: 0
+	// for none.
+	xattrList int
 }
 
 // FileMode converts from the Linux permission bits to Go’s permission bits.
@@ -307,6 +311,12 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 		// xxh64 and xxh3, 20 for sha1, up to 64 for SHA-3.
 		f.Checksum = make([]byte, rsyncchecksum.NewStrong(rt.Conn.Session, 0).FileLen())
 		if _, err := io.ReadFull(rt.Conn.Reader, f.Checksum); err != nil {
+			return nil, err
+		}
+	}
+
+	if rt.xattrs() {
+		if err := rt.receiveXattrs(f); err != nil {
 			return nil, err
 		}
 	}

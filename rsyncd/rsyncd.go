@@ -489,6 +489,9 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 	if opts.DebugGTE(rsyncopts.DEBUG_PROTO, 1) {
 		s.logger.Printf("(Server) Protocol versions: remote=%d, negotiated=%d", remoteProtocol, proto)
 	}
+	if err := opts.CheckProtocol(proto); err != nil {
+		return err
+	}
 
 	if err := c.WriteCompatFlags(opts.ShellCommand()); err != nil {
 		return err
@@ -603,10 +606,11 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			AlwaysChecksum: opts.AlwaysChecksum(),
 			WholeFile:      opts.WholeFile(),
 
-			Inplace:     opts.Inplace(),
-			BlockSize:   opts.BlockSize(),
-			KeepPartial: opts.KeepPartial(),
-			PartialDir:  opts.PartialDir(),
+			Inplace:        opts.Inplace(),
+			BlockSize:      opts.BlockSize(),
+			PreserveXattrs: opts.PreserveXattrs(),
+			KeepPartial:    opts.KeepPartial(),
+			PartialDir:     opts.PartialDir(),
 
 			AppendMode: opts.AppendMode(),
 

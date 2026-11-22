@@ -76,6 +76,11 @@ func (o *Options) ServerOptions() []string {
 	if o.PreservePerms() {
 		argstr += "p"
 	}
+	// -XX for rsync's own names too (options.c: X once per level, up
+	// to two).
+	for i := 0; i < o.preserve_xattrs && i < 2; i++ {
+		argstr += "X"
+	}
 	if o.Recurse() {
 		argstr += "r"
 	}

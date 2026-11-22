@@ -38,7 +38,7 @@ func (st *Transfer) hashSearch(targets []target, tagTable map[uint16]int, head r
 	readSize := max(3*head.BlockLength, 256*1024)
 	ms := mapFile(f, fi.Size(), readSize, head.BlockLength)
 
-	if err := st.Conn.WriteNdxAndAttrs(fileIndex, st.attrs); err != nil {
+	if err := st.writeNdxAndAttrs(fileIndex, fl, st.attrs); err != nil {
 		return err
 	}
 

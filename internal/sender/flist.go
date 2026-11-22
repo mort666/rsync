@@ -35,6 +35,9 @@ type file struct {
 	Gid        int32
 	LinkTarget string
 	Rdev       int32
+
+	// xattrs is the index of the file's xattr list (-X), or -1.
+	xattrs int
 }
 
 type fileList struct {
@@ -229,6 +232,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		isDir:   info.IsDir(),
 		Wpath:   name,
 		Length:  info.Size(),
+		xattrs:  -1,
 	})
 
 	s.fec.Reset()
@@ -490,6 +494,20 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 			// send empty md4 checksum
 		}
 		s.fec.WriteString(string(checksum))
+	}
+
+	// With -X every entry carries its xattr list (flist.c:send_file_list,
+	// send_xattr). One that cannot be read goes empty, with io_error set.
+	if s.st.xattrs() {
+		list, err := s.st.readXattrs(s.source, path, info.Mode().IsRegular() || info.IsDir())
+		if err != nil {
+			s.st.Logger.Printf("reading xattrs of %s: %v", name, err)
+			s.st.noteIOError(ioErrGeneral)
+			list = nil
+		}
+		b, ndx := s.st.xattrCache.AppendSend(nil, list)
+		s.fec.WriteString(string(b))
+		s.fileList.Files[len(s.fileList.Files)-1].xattrs = ndx
 	}
 
 	s.conn.WriteString(s.fec.String())

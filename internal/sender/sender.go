@@ -52,12 +52,15 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		}
 
 		fl := fileList.Files[fileIndex]
+		if err := st.readXattrRequest(fl, attrs); err != nil {
+			return err
+		}
 
 		// From protocol 29 the generator also names files it only wants
 		// to report on (rsync's itemize). There is nothing to send but the
-		// attributes back.
+		// attributes back, and any xattr values it asked for.
 		if !attrs.Transfer() {
-			if err := st.Conn.WriteNdxAndAttrs(fileIndex, attrs); err != nil {
+			if err := st.writeNdxAndAttrs(fileIndex, fl, attrs); err != nil {
 				return err
 			}
 			continue
@@ -71,7 +74,7 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		st.attrs = attrs
 
 		if st.Opts.DryRun() {
-			if err := st.Conn.WriteNdxAndAttrs(fileIndex, attrs); err != nil {
+			if err := st.writeNdxAndAttrs(fileIndex, fl, attrs); err != nil {
 				return err
 			}
 			continue
@@ -258,7 +261,7 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 		return err
 	}
 
-	if err := st.Conn.WriteNdxAndAttrs(fileIndex, st.attrs); err != nil {
+	if err := st.writeNdxAndAttrs(fileIndex, fl, st.attrs); err != nil {
 		return err
 	}
 

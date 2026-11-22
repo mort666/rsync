@@ -10,6 +10,7 @@ import (
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsynctoken"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
+	"github.com/gokrazy/rsync/internal/rsyncxattr"
 )
 
 type Osenv struct {
@@ -68,6 +69,11 @@ type Transfer struct {
 	// attrs are the item attributes the generator sent with the file being
 	// sent, echoed back before its data (protocol 29+).
 	attrs rsyncwire.ItemAttrs
+
+	// xattrCache holds the xattr lists sent in the file list (-X), and
+	// xattrState which abbreviated values the generator asked for.
+	xattrCache rsyncxattr.Cache
+	xattrState rsyncxattr.SenderState
 
 	enc    rsynctoken.Encoder // see encoder
 	litBuf []byte             // see sendToken

@@ -36,11 +36,19 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 			// TODO: send done message
 			continue
 		}
+		fetched, err := rt.readXattrValues(fileList[idx], attrs)
+		if err != nil {
+			return err
+		}
 		if !attrs.Transfer() {
 			// An item the generator reported on (protocol 29+), which the
-			// sender echoes: no data follows.
+			// sender echoes: no data follows, but xattrs may have changed.
+			if attrs.Iflags&rsync.ITEM_REPORT_XATTR != 0 {
+				rt.setXattrsInPlace(fileList[idx], fetched)
+			}
 			continue
 		}
+		rt.xattrFetched = fetched
 		if fileList[idx].Mode&rsync.S_IFMT != rsync.S_IFREG {
 			return fmt.Errorf("received request to transfer non-regular file: %d", idx)
 		}
@@ -285,6 +293,10 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_DELTASUM, 1) {
 		rt.Logger.Printf("checksum %x matches!", localSum)
 	}
+
+	// The xattrs go on before the file takes the destination's place;
+	// unchanged abbreviated ones come from the file it replaces.
+	rt.setXattrs(out.f, f, rt.xattrFetched, localFile)
 
 	if localFile != nil {
 		// Close the file earlier than the calling function’s deferred Close(),

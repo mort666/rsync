@@ -199,7 +199,10 @@ negotiate a faster checksum (xxh128).
 
 ### Protocol related limitations
 
-* xattrs (including acls), which rsync protocol 30 introduced, are not supported.
+* ACLs (`-A`) are not supported. Extended attributes (`-X`, from protocol 30)
+  are, on Linux only, and only for regular files and folders: not for
+  symlinks, devices or specials. `--fake-super` is not supported. On other
+  platforms `-X` is refused, as rsync builds without xattr support refuse it.
 * Incremental recursion (the `i` capability letter) is not supported, so
   large trees send their whole file list up front.
 * `--compress-threads` is accepted, but zstd compresses on one thread.

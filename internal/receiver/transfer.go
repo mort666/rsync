@@ -12,6 +12,7 @@ import (
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsynctoken"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
+	"github.com/gokrazy/rsync/internal/rsyncxattr"
 )
 
 // TransferOpts is a subset of Opts which is required for implementing a receiver.
@@ -33,6 +34,10 @@ type TransferOpts struct {
 	IgnoreTimes       bool
 	AlwaysChecksum    bool
 	WholeFile         bool
+
+	// PreserveXattrs is how many -X were given (see
+	// rsyncopts.Options.PreserveXattrs).
+	PreserveXattrs int
 
 	// BlockSize is --block-size: the delta block length for every file,
 	// or 0 for rsync's choice per file (sum_sizes_sqroot).
@@ -109,6 +114,15 @@ type Transfer struct {
 	delStats      rsyncwire.DelStats // what --delete removed (see countDeleted)
 	touchedBlocks int64              // 4 KiB blocks written to files (protocol 33 MSG_BLOCK_STATS)
 	dec           rsynctoken.Decoder // see decoder
+
+	// xattrCache holds the file list's xattr lists (-X). genXattr is the
+	// generator's finding for the file it is on, xattrFetched the values
+	// the receiver got with the file it is on.
+	xattrCache   rsyncxattr.Cache
+	xattrGen     rsyncxattr.GeneratorState
+	xattrRecv    rsyncxattr.ReceiverState
+	genXattr     xattrState
+	xattrFetched map[int][]byte
 }
 
 type retouchDir struct {

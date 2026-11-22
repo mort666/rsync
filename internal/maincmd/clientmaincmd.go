@@ -351,6 +351,9 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	if opts.DebugGTE(rsyncopts.DEBUG_PROTO, 1) {
 		osenv.Logf("(Client) Protocol versions: remote=%d, negotiated=%d", remoteProtocol, proto)
 	}
+	if err := opts.CheckProtocol(proto); err != nil {
+		return nil, nil, err
+	}
 
 	if err := c.ReadCompatFlags(); err != nil {
 		return nil, nil, fmt.Errorf("reading compat flags: %v", err)
@@ -494,10 +497,11 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			AlwaysChecksum:    opts.AlwaysChecksum(),
 			WholeFile:         opts.WholeFile(),
 
-			Inplace:     opts.Inplace(),
-			BlockSize:   opts.BlockSize(),
-			KeepPartial: opts.KeepPartial(),
-			PartialDir:  opts.PartialDir(),
+			Inplace:        opts.Inplace(),
+			BlockSize:      opts.BlockSize(),
+			PreserveXattrs: opts.PreserveXattrs(),
+			KeepPartial:    opts.KeepPartial(),
+			PartialDir:     opts.PartialDir(),
 
 			AppendMode: opts.AppendMode(),
 
