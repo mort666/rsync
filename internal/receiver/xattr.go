@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 
 	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
@@ -37,24 +38,73 @@ func (rt *Transfer) xattrListOf(f *File) rsyncxattr.List {
 	return rt.xattrCache.List(f.xattrList - 1)
 }
 
-// xattrTarget reports whether f is a type this side reads and writes
-// xattrs of: regular files and folders (see sender.readXattrs).
-func xattrTarget(f *File) bool {
-	mode := f.Mode & rsync.S_IFMT
-	return mode == rsync.S_IFREG || mode == rsync.S_IFDIR
+// How the receiver reaches a file's xattrs.
+const (
+	xattrNone = iota
+	xattrByFD // regular files and folders, opened
+	xattrAt   // symlinks, devices and specials, by name in their folder
+)
+
+// xattrKind is how this side reaches f's xattrs. Linux keeps user names
+// off symlinks, devices and specials, so only root (with security and
+// trusted names) has any there to set, and it needs /proc/self/fd to reach
+// them without opening them.
+func (rt *Transfer) xattrKind(f *File) int {
+	switch f.Mode & rsync.S_IFMT {
+	case rsync.S_IFREG, rsync.S_IFDIR:
+		return xattrByFD
+	}
+	if rt.xattrFilter().Root && rsyncxattr.ProcFDAvailable() {
+		return xattrAt
+	}
+	return xattrNone
 }
 
+// xattrTarget reports whether f's xattrs come through a descriptor: the
+// ones a transfer sets on the file it writes.
+func (rt *Transfer) xattrTarget(f *File) bool { return rt.xattrKind(f) == xattrByFD }
+
 // localXattrs reads the destination's own xattrs of f, if it is there.
-func (rt *Transfer) localXattrs(name string) (map[string][]byte, error) {
-	in, err := rt.DestRoot.Open(name)
+func (rt *Transfer) localXattrs(f *File) (map[string][]byte, error) {
+	var values map[string][]byte
+	err := rt.withXattrs(f, func(read func() (map[string][]byte, error), _ func(values, current map[string][]byte) error) error {
+		var err error
+		values, err = read()
+		return err
+	})
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, err
+	return values, err
+}
+
+// withXattrs calls fn with ways to read and set f's xattrs at the
+// destination, as xattrKind says to reach them.
+func (rt *Transfer) withXattrs(f *File, fn func(read func() (map[string][]byte, error), set func(values, current map[string][]byte) error) error) error {
+	filter := rt.xattrFilter()
+	keep := func(name string) bool { return filter.KeepLocal(name, false) }
+	switch rt.xattrKind(f) {
+	case xattrByFD:
+		in, err := rt.DestRoot.Open(f.Name)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		return fn(func() (map[string][]byte, error) { return rsyncxattr.Read(in, keep) },
+			func(values, current map[string][]byte) error { return rsyncxattr.Set(in, values, current, keep) })
+	case xattrAt:
+		dir, err := rt.DestRoot.Open(filepath.Dir(f.Name))
+		if err != nil {
+			return err
+		}
+		defer dir.Close()
+		name := filepath.Base(f.Name)
+		return fn(func() (map[string][]byte, error) { return rsyncxattr.ReadAt(dir, name, keep) },
+			func(values, current map[string][]byte) error {
+				return rsyncxattr.SetAt(dir, name, values, current, keep)
+			})
 	}
-	defer in.Close()
-	return rt.readXattrsOf(in)
+	return nil
 }
 
 func (rt *Transfer) readXattrsOf(in *os.File) (map[string][]byte, error) {
@@ -77,10 +127,10 @@ func (rt *Transfer) checkXattrs(f *File) xattrState {
 		return xattrState{list: -1}
 	}
 	st := xattrState{list: f.xattrList - 1}
-	if !xattrTarget(f) {
+	if rt.xattrKind(f) == xattrNone {
 		return st
 	}
-	local, err := rt.localXattrs(f.Name)
+	local, err := rt.localXattrs(f)
 	if err != nil {
 		rt.Logger.Printf("reading xattrs of %s: %v", f.Name, err)
 	}
@@ -146,7 +196,7 @@ func (rt *Transfer) readXattrValues(f *File, attrs rsyncwire.ItemAttrs) (map[int
 // may be target itself, or nil. It reports failures as rsync does, without
 // stopping the transfer.
 func (rt *Transfer) setXattrs(target *os.File, f *File, fetched map[int][]byte, basis *os.File) {
-	if !rt.xattrs() || rt.Opts.DryRun || !xattrTarget(f) {
+	if !rt.xattrs() || rt.Opts.DryRun || !rt.xattrTarget(f) {
 		return
 	}
 	current, err := rt.readXattrsOf(target)
@@ -172,18 +222,25 @@ func (rt *Transfer) setXattrs(target *os.File, f *File, fetched map[int][]byte, 
 }
 
 // setXattrsInPlace sets f's xattrs on the destination as it is, for a file
-// the sender did not transfer.
+// the sender did not transfer, and for symlinks, devices and specials.
 func (rt *Transfer) setXattrsInPlace(f *File, fetched map[int][]byte) {
-	if !rt.xattrs() || rt.Opts.DryRun || !xattrTarget(f) {
+	if !rt.xattrs() || rt.Opts.DryRun || rt.xattrKind(f) == xattrNone {
 		return
 	}
-	target, err := rt.DestRoot.Open(f.Name)
+	err := rt.withXattrs(f, func(read func() (map[string][]byte, error), set func(values, current map[string][]byte) error) error {
+		current, err := read()
+		if err != nil {
+			return err
+		}
+		values, err := rt.xattrRecv.Values(rt.xattrListOf(f), f.xattrList-1, fetched, current)
+		if err != nil {
+			rt.xattrFailed(f, err) // and set what it has
+		}
+		return set(values, current)
+	})
 	if err != nil {
 		rt.xattrFailed(f, err)
-		return
 	}
-	defer target.Close()
-	rt.setXattrs(target, f, fetched, target)
 }
 
 func (rt *Transfer) xattrFailed(f *File, err error) {

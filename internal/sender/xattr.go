@@ -3,6 +3,7 @@ package sender
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/gokrazy/rsync/internal/rsyncwire"
 	"github.com/gokrazy/rsync/internal/rsyncxattr"
@@ -15,25 +16,74 @@ func (st *Transfer) xattrFilter() rsyncxattr.Filter {
 	return rsyncxattr.Filter{Level: st.Opts.PreserveXattrs(), Root: os.Geteuid() == 0}
 }
 
-// readXattrs is the list a file-list entry carries (get_xattr): for regular
-// files and folders, which every platform supports. Symlinks, devices and
-// specials go with none: opening a FIFO would block, and Linux has no user
-// xattrs on symlinks.
-func (st *Transfer) readXattrs(source FileSource, path string, regularOrDir bool) (rsyncxattr.List, error) {
-	if !regularOrDir {
+// xattrFile reaches one source file's xattrs: through a descriptor for
+// regular files and folders, or by name in its folder for symlinks,
+// devices and specials, which cannot be opened (a FIFO would block).
+type xattrFile struct {
+	f    *os.File // regular file or folder
+	dir  *os.File // the folder of name, for other types
+	name string
+}
+
+// openXattrs opens path's xattrs in source, or returns nil when there are
+// none to read: a source that is not on disk, or other types where
+// /proc/self/fd is hidden.
+func openXattrs(source FileSource, path string, regularOrDir bool) (*xattrFile, error) {
+	if regularOrDir {
+		f, err := source.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		osf, ok := f.(*os.File)
+		if !ok {
+			f.Close()
+			return nil, nil // a source without xattrs
+		}
+		return &xattrFile{f: osf}, nil
+	}
+	rs, ok := source.(*osRootSource)
+	if !ok || !rsyncxattr.ProcFDAvailable() {
 		return nil, nil
 	}
-	f, err := source.Open(path)
+	dir, err := rs.root.Open(filepath.Dir(path))
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	osf, ok := f.(*os.File)
-	if !ok {
-		return nil, nil // a source without xattrs
+	return &xattrFile{dir: dir, name: filepath.Base(path)}, nil
+}
+
+func (x *xattrFile) read(keep func(name string) bool) (map[string][]byte, error) {
+	if x.f != nil {
+		return rsyncxattr.Read(x.f, keep)
 	}
+	return rsyncxattr.ReadAt(x.dir, x.name, keep)
+}
+
+func (x *xattrFile) get(attr string) ([]byte, error) {
+	if x.f != nil {
+		return rsyncxattr.Get(x.f, attr)
+	}
+	return rsyncxattr.GetAt(x.dir, x.name, attr)
+}
+
+func (x *xattrFile) Close() error {
+	if x.f != nil {
+		return x.f.Close()
+	}
+	return x.dir.Close()
+}
+
+// readXattrs is the list a file-list entry carries (get_xattr), for any
+// type the file list holds, as rsync reads them (lgetxattr for what is not
+// a regular file or folder).
+func (st *Transfer) readXattrs(source FileSource, path string, regularOrDir bool) (rsyncxattr.List, error) {
+	x, err := openXattrs(source, path, regularOrDir)
+	if err != nil || x == nil {
+		return nil, err
+	}
+	defer x.Close()
 	filter := st.xattrFilter()
-	values, err := rsyncxattr.Read(osf, func(name string) bool { return filter.KeepLocal(name, true) })
+	values, err := x.read(func(name string) bool { return filter.KeepLocal(name, true) })
 	if err != nil {
 		return nil, err
 	}
@@ -69,16 +119,15 @@ func (st *Transfer) writeNdxAndAttrs(ndx int32, fl file, attrs rsyncwire.ItemAtt
 		return nil
 	}
 	b, err := st.xattrState.AppendValues(nil, st.xattrCache.List(fl.xattrs), fl.xattrs, func(name string) ([]byte, error) {
-		f, err := fl.source.Open(fl.path)
+		x, err := openXattrs(fl.source, fl.path, fl.regular || fl.isDir)
 		if err != nil {
 			return nil, err
 		}
-		defer f.Close()
-		osf, ok := f.(*os.File)
-		if !ok {
+		if x == nil {
 			return nil, fmt.Errorf("no xattrs in this source")
 		}
-		return rsyncxattr.Get(osf, name)
+		defer x.Close()
+		return x.get(name)
 	})
 	if err != nil {
 		st.Logger.Printf("%s: %v", fl.Wpath, err)

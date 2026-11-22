@@ -100,6 +100,11 @@ func xattrTree(t *testing.T) string {
 	for name, values := range xattrFiles {
 		setXattrs(t, filepath.Join(src, name), values)
 	}
+	// A symlink, which has no user xattrs on Linux: the sender reads it
+	// by name without following it, the receiver leaves it be.
+	if err := os.Symlink("small", filepath.Join(src, "link")); err != nil {
+		t.Fatal(err)
+	}
 	return src
 }
 
@@ -176,7 +181,7 @@ func TestXattrs(t *testing.T) {
 	} {
 		t.Run(dir.name, func(t *testing.T) {
 			src, dest := xattrTree(t), t.TempDir()
-			args := []string{"-rtX"}
+			args := []string{"-rtlX"}
 			if out, err := dir.run(t, src, dest, args...); err != nil {
 				t.Fatalf("first run: %v\n%s", err, out)
 			}
@@ -205,5 +210,127 @@ func TestXattrsNeedProtocol30(t *testing.T) {
 	}
 	if !strings.Contains(out, "requires protocol 30") {
 		t.Errorf("want an error that -X requires protocol 30:\n%s", out)
+	}
+}
+
+// lxattrs reads path's xattrs under prefix without following a symlink.
+func lxattrs(t *testing.T, path, prefix string) map[string][]byte {
+	t.Helper()
+	buf := make([]byte, 64*1024)
+	n, err := unix.Llistxattr(path, buf)
+	if err != nil {
+		t.Fatalf("llistxattr %s: %v", path, err)
+	}
+	got := map[string][]byte{}
+	for _, name := range strings.Split(string(buf[:n]), "\x00") {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		v := make([]byte, 64*1024)
+		m, err := unix.Lgetxattr(path, name, v)
+		if err != nil {
+			t.Fatalf("lgetxattr %s %s: %v", path, name, err)
+		}
+		got[name] = v[:m]
+	}
+	return got
+}
+
+// As root, xattrs outside the user namespace go across too, on symlinks
+// and specials as well, which Linux allows for trusted and security names.
+// A gokrazy sender used to send none for a symlink, which made a stock
+// receiver take away the destination's.
+func TestXattrsRoot(t *testing.T) {
+	stockHasXattrs(t)
+	if os.Geteuid() != 0 {
+		t.Skip("needs root: trusted xattrs")
+	}
+	if p, err := strconv.Atoi(os.Getenv("RSYNC_MATRIX_PROTOCOL")); err == nil && p < 30 {
+		t.Skip("-X needs protocol 30")
+	}
+	tree := func(t *testing.T) (src, dest string) {
+		src, dest = filepath.Join(t.TempDir(), "src"), t.TempDir()
+		if err := os.MkdirAll(src, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, "file"), []byte("f"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("file", filepath.Join(src, "link")); err != nil {
+			t.Fatal(err)
+		}
+		if err := unix.Mkfifo(filepath.Join(src, "fifo"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for name, values := range map[string]map[string][]byte{
+			"file": {"trusted.f": []byte("f"), "user.u": bigValue},
+			"link": {"trusted.l": []byte("l"), "trusted.lbig": bigValue},
+			"fifo": {"trusted.p": []byte("p")},
+		} {
+			for attr, v := range values {
+				if err := unix.Lsetxattr(filepath.Join(src, name), attr, v, 0); err != nil {
+					t.Skipf("lsetxattr %s %s: %v (no trusted xattrs here)", name, attr, err)
+				}
+			}
+		}
+		return src, dest
+	}
+	check := func(t *testing.T, src, dest string) {
+		t.Helper()
+		for _, name := range []string{"file", "link", "fifo"} {
+			for _, prefix := range []string{"trusted.", "user."} {
+				want := lxattrs(t, filepath.Join(src, name), prefix)
+				got := lxattrs(t, filepath.Join(dest, name), prefix)
+				if !maps.EqualFunc(got, want, bytes.Equal) {
+					t.Errorf("%s: %s xattrs %s, want %s", name, prefix, describe(got), describe(want))
+				}
+			}
+		}
+	}
+	args := []string{"-rtlDX"}
+	for _, dir := range []struct {
+		name string
+		run  func(t *testing.T, src, dest string) (string, error)
+	}{
+		{"stock to gokrazy", func(t *testing.T, src, dest string) (string, error) {
+			ts := rsynctest.New(t, rsynctest.WritableInteropModule(dest))
+			return stock(t, append(args, src+"/", "rsync://localhost:"+ts.Port+"/interop/")...)
+		}},
+		{"gokrazy to stock", func(t *testing.T, src, dest string) (string, error) {
+			ts := rsynctest.New(t, rsynctest.InteropModule(src))
+			return stock(t, append(args, "rsync://localhost:"+ts.Port+"/interop/", dest+"/")...)
+		}},
+		{"gokrazy client pulls", func(t *testing.T, src, dest string) (string, error) {
+			addr, _ := startStockDaemonConf(t, src, "")
+			return gokrazyPull(t, addr, "", dest, args...)
+		}},
+		{"gokrazy client pushes", func(t *testing.T, src, dest string) (string, error) {
+			addr := startStockDaemonModule(t, dest, false)
+			return gokrazyRun(t, addr, "mod/", []string{src + "/"}, []rsyncclient.Option{rsyncclient.WithSender()}, args...)
+		}},
+		{"gokrazy to gokrazy", func(t *testing.T, src, dest string) (string, error) {
+			ts := rsynctest.New(t, rsynctest.WritableInteropModule(dest))
+			return gokrazyRun(t, "localhost:"+ts.Port, "interop/", []string{src + "/"}, []rsyncclient.Option{rsyncclient.WithSender()}, args...)
+		}},
+	} {
+		t.Run(dir.name, func(t *testing.T) {
+			src, dest := tree(t)
+			if out, err := dir.run(t, src, dest); err != nil {
+				t.Fatalf("first run: %v\n%s", err, out)
+			}
+			check(t, src, dest)
+			// The destination's symlink gains a name the source lacks, and
+			// the source's loses one: both runs must end equal.
+			if err := unix.Lsetxattr(filepath.Join(dest, "link"), "trusted.extra", []byte("x"), 0); err != nil {
+				t.Fatal(err)
+			}
+			if err := unix.Lremovexattr(filepath.Join(src, "link"), "trusted.l"); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := dir.run(t, src, dest); err != nil {
+				t.Fatalf("second run: %v\n%s", err, out)
+			}
+			check(t, src, dest)
+		})
 	}
 }

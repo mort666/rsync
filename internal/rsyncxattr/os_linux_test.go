@@ -66,3 +66,76 @@ func keys(m map[string][]byte) []string {
 	}
 	return ks
 }
+
+// ReadAt reaches a symlink itself, not what it points at, and a FIFO
+// without opening it (which would block); as root, SetAt sets and removes
+// names Linux allows there.
+func TestReadSetAt(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Setxattr(target, "user.t", []byte("t"), 0); err != nil {
+		if errors.Is(err, unix.ENOTSUP) {
+			t.Skip("no user xattrs here")
+		}
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(filepath.Join(dir, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	all := func(string) bool { return true }
+	for _, name := range []string{"link", "fifo"} {
+		got, err := ReadAt(d, name, all)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(got) != 0 {
+			t.Errorf("%s: %v, want nothing (not the target's)", name, keys(got))
+		}
+	}
+	if _, err := ReadAt(d, "missing", all); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("missing: %v, want ErrNotExist", err)
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("setting trusted names needs root")
+	}
+	for _, name := range []string{"link", "fifo"} {
+		want := map[string][]byte{"trusted.a": []byte("a"), "trusted.big": bytes.Repeat([]byte("b"), 100)}
+		if err := SetAt(d, name, want, nil, all); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got, err := ReadAt(d, name, func(n string) bool { return strings.HasPrefix(n, "trusted.") })
+		if err != nil || !maps.EqualFunc(got, want, bytes.Equal) {
+			t.Errorf("%s: %v, %v; want %v", name, keys(got), err, keys(want))
+		}
+		if err := SetAt(d, name, map[string][]byte{"trusted.a": []byte("a")}, got, all); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := ReadAt(d, name, func(n string) bool { return strings.HasPrefix(n, "trusted.") }); len(got) != 1 {
+			t.Errorf("%s after removing: %v", name, keys(got))
+		}
+	}
+	if got, _ := Read(mustOpen(t, target), all); len(got) != 1 || got["user.t"] == nil {
+		t.Errorf("the target changed: %v", keys(got))
+	}
+}
+
+func mustOpen(t *testing.T, path string) *os.File {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
