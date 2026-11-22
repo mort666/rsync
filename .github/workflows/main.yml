@@ -71,6 +71,18 @@ jobs:
         - macos-latest
         - ubuntu-latest
         - windows-latest
+        # Windows runs once with each common rsync build: cwRsync from
+        # Chocolatey (Cygwin based) and MSYS2's, which Git Bash users add.
+        rsync: ['']
+        exclude:
+        - os: windows-latest
+          rsync: ''
+        include:
+        - os: windows-latest
+          rsync: cwrsync
+        - os: windows-latest
+          rsync: msys2
+    name: tests (${{ matrix.os }}${{ matrix.rsync && format(', {0}', matrix.rsync) || '' }})
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -96,9 +108,23 @@ jobs:
         docker build --pull --no-cache --rm -t=rsync-debian -f testdata/ci-debian.Dockerfile .
         docker build --pull --no-cache --rm -t=rsync-fedora -f testdata/ci-fedora.Dockerfile .
 
-    - name: install rsync
-      if: matrix.os == 'windows-latest'
+    - name: install rsync (cwRsync)
+      if: matrix.rsync == 'cwrsync'
       run: choco install rsync
+
+    - name: install rsync (MSYS2)
+      if: matrix.rsync == 'msys2'
+      uses: msys2/setup-msys2@v2
+      with:
+        update: false
+        install: rsync
+
+    - name: put MSYS2's rsync on PATH
+      if: matrix.rsync == 'msys2'
+      shell: msys2 {0}
+      run: |
+        cygpath -w /usr/bin >> "$GITHUB_PATH"
+        rsync --version | head -1
 
     - name: run tests (linux)
       if: matrix.os == 'ubuntu-latest'

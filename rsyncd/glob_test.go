@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -130,6 +131,9 @@ func daemonList(t *testing.T, addr, remotePath string) []string {
 // " mod/" splits an argument. gorsyncd took every path literally, so a
 // client that escapes names for stock rsync got "not found".
 func TestDaemonArgsLikeStockRsync(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the tree has names Windows does not allow, such as a*b")
+	}
 	if v := rsynctest.RsyncVersion(t); strings.HasPrefix(v, "2.") {
 		// rsync 2.x expands daemon wildcards differently (for example "*"
 		// skips dotfiles and ".*" is an error). This test pins the 3.x

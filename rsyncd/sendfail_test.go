@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gokrazy/rsync/internal/rsynctest"
@@ -20,6 +21,9 @@ import (
 func TestDaemonTellsClientWhatItCannotSend(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root reads everything")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce POSIX permission bits")
 	}
 	dir := t.TempDir()
 	for _, rel := range []string{"ok.txt", "secret.txt"} {
@@ -68,6 +72,9 @@ func TestDaemonTellsClientWhatItCannotSend(t *testing.T) {
 func TestDaemonTellsClientWhatItCannotDelete(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root deletes everything")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce POSIX permission bits")
 	}
 	for name, tt := range map[string]struct {
 		start func(t *testing.T, dir string) string

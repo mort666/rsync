@@ -215,6 +215,7 @@ func TestCodecsGolden(t *testing.T) {
 		if strings.HasPrefix(line, "#") {
 			continue
 		}
+		line = strings.TrimSuffix(line, "\r") // a checkout with CRLF line endings
 		cmd, want, ok := strings.Cut(line, "\t")
 		if !ok {
 			t.Fatalf("malformed golden line %q", line)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +26,9 @@ func unreadableTree(t *testing.T) string {
 	t.Helper()
 	if os.Getuid() == 0 {
 		t.Skip("root reads every folder")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce POSIX permission bits")
 	}
 	src := filepath.Join(t.TempDir(), "src")
 	for _, p := range []string{"ok/a", "locked/b"} {

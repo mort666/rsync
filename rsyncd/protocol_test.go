@@ -124,7 +124,9 @@ func TestStockClientProtocol27(t *testing.T) {
 	bin := rsynctest.TridgeOrGTFO(t, "runs the stock rsync client")
 	dir := protocolTestDir(t)
 	ts := rsynctest.New(t, []rsyncd.Module{{Name: "mod", Path: dir}})
-	cmd := exec.Command(bin, "--protocol=27", "-n", "-r", "rsync://localhost:"+ts.Port+"/mod/", t.TempDir()+"/")
+	// A relative destination: rsync on Windows reads "C:\\..." as host C.
+	t.Chdir(t.TempDir())
+	cmd := exec.Command(bin, "--protocol=27", "-n", "-r", "rsync://localhost:"+ts.Port+"/mod/", "dest/")
 	cmd.Stdout = testlogger.New(t)
 	cmd.Stderr = testlogger.New(t)
 	if err := cmd.Run(); err != nil {
