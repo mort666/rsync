@@ -33,7 +33,8 @@ build_release() {
   tarball="$dir/src/rsync-$version.tar.gz"
   if [ ! -f "$tarball" ]; then
     echo "$name: downloading rsync-$version.tar.gz"
-    curl -sSfL -o "$tarball.part" "https://download.samba.org/pub/rsync/src/rsync-$version.tar.gz"
+    # Retry: a fresh runner's first requests sometimes fail.
+    curl -sSfL --retry 5 --retry-all-errors --retry-delay 3 -o "$tarball.part" "https://download.samba.org/pub/rsync/src/rsync-$version.tar.gz"
     mv "$tarball.part" "$tarball"
   fi
   got=$(sha256sum "$tarball" | cut -d' ' -f1)
@@ -119,6 +120,8 @@ while read -r name version sum kind; do
   set -e
   if [ "$rc" -ne 0 ]; then
     echo "$name: FAILED, see $log"
+    # CI keeps no files from here, so show why.
+    sed 's/^/  | /' "$log" | tail -40
     failed="$failed $name"
   else
     tail -1 "$log"
