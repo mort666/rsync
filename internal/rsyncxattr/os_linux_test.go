@@ -38,7 +38,7 @@ func TestReadSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]byte{"user.keep": []byte("k"), "user.big": bytes.Repeat([]byte("b"), 5000), "user.empty": {}}
+	want := map[string][]byte{"user.keep": []byte("k"), "user.big": bytes.Repeat([]byte("b"), 2000), "user.empty": {}}
 	if err := Set(f, want, current, func(name string) bool { return name != "user.keep" }); err != nil {
 		t.Fatal(err)
 	}

@@ -67,6 +67,11 @@ build_master() {
   if [ ! -f Makefile ] || [ configure.ac -nt Makefile ]; then
     ./configure --prefix="$out" --disable-md2man
   fi
+  # configure.sh and config.h.in share one Makefile rule, which make -j
+  # runs twice at once when configure.ac is newer: the two runs collide
+  # ("cp: cannot create regular file 'configure.sh.old'"). Settle them
+  # first, on their own.
+  make conf
   make -j"$jobs" rsync
   mkdir -p "$out/bin"
   cp rsync "$out/bin/rsync"
