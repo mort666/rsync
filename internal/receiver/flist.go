@@ -12,6 +12,7 @@ import (
 	"github.com/gokrazy/rsync/internal/flistcmp"
 	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
+	"github.com/gokrazy/rsync/internal/rsyncwire"
 )
 
 // rsync/flist.c:flist_sort_and_clean. The sender sorts the same way and
@@ -276,7 +277,9 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	// Before protocol 28, every entry carried a checksum, all zeros for
 	// anything but a regular file.
 	if rt.Opts.AlwaysChecksum && (isReg || proto < 28) {
-		if _, err := io.ReadFull(rt.Conn.Reader, f.Checksum[:]); err != nil {
+		// As long as the file checksum is: 16 bytes for MD4 and MD5, 8 for
+		// xxh64 and xxh3.
+		if _, err := io.ReadFull(rt.Conn.Reader, f.Checksum[:rsyncchecksum.NewStrong(rt.Conn.Session, 0).FileLen()]); err != nil {
 			return nil, err
 		}
 	}
@@ -306,33 +309,56 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 	var fileList []*File
 	var endListIOErrors int32
 	for {
-		b, err := rt.Conn.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		if b == 0 {
-			break
-		}
-		flags := uint16(b)
-		if rt.Conn.Session.Protocol >= 28 && flags&rsync.XMIT_EXTENDED_FLAGS != 0 {
-			b, err := rt.Conn.ReadByte()
-			if err != nil {
-				return nil, err
-			}
-			flags |= uint16(b) << 8
-		}
-		// From protocol 30 with a safe file list, an I/O error can end the
-		// list, followed by the error (flist.c:recv_file_list).
-		if rt.Conn.Session.Protocol >= 30 && flags == rsync.XMIT_EXTENDED_FLAGS|rsync.XMIT_IO_ERROR_ENDLIST {
-			if !rt.Conn.Session.SafeFlist() {
-				return nil, fmt.Errorf("invalid flist flag: %#x", flags)
-			}
+		// With CF_VARINT_FLIST_FLAGS the flags are a varint, and 0 ends
+		// the list, followed by the I/O error. Otherwise one byte, two
+		// from protocol 28 with XMIT_EXTENDED_FLAGS.
+		var flags uint16
+		if rt.Conn.Session.CompatFlags&rsyncwire.CfVarintFlistFlags != 0 {
 			v, err := rt.Conn.ReadVarint()
 			if err != nil {
 				return nil, err
 			}
-			endListIOErrors = v
-			break
+			if v == 0 {
+				e, err := rt.Conn.ReadVarint()
+				if err != nil {
+					return nil, err
+				}
+				endListIOErrors = e & 7 // IOERR_VALID_MASK
+				break
+			}
+			if v&^0xffff != 0 {
+				return nil, fmt.Errorf("unsupported file-list flags %#x", v)
+			}
+			flags = uint16(v)
+		} else {
+			b, err := rt.Conn.ReadByte()
+			if err != nil {
+				return nil, err
+			}
+			if b == 0 {
+				break
+			}
+			flags = uint16(b)
+			if rt.Conn.Session.Protocol >= 28 && flags&rsync.XMIT_EXTENDED_FLAGS != 0 {
+				b, err := rt.Conn.ReadByte()
+				if err != nil {
+					return nil, err
+				}
+				flags |= uint16(b) << 8
+			}
+			// From protocol 30 with a safe file list, an I/O error can end
+			// the list, followed by the error (flist.c:recv_file_list).
+			if rt.Conn.Session.Protocol >= 30 && flags == rsync.XMIT_EXTENDED_FLAGS|rsync.XMIT_IO_ERROR_ENDLIST {
+				if !rt.Conn.Session.SafeFlist() {
+					return nil, fmt.Errorf("invalid flist flag: %#x", flags)
+				}
+				v, err := rt.Conn.ReadVarint()
+				if err != nil {
+					return nil, err
+				}
+				endListIOErrors = v
+				break
+			}
 		}
 
 		f, err := rt.receiveFileEntry(flags, lastFileEntry)

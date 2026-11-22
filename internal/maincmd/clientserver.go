@@ -3,7 +3,6 @@ package maincmd
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -15,11 +14,11 @@ import (
 	"time"
 
 	"github.com/gokrazy/rsync/internal/restrict"
+	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsyncstats"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
-	"github.com/mmcloughlin/md4"
 )
 
 // rsync/clientserver.c:start_socket_client
@@ -122,24 +121,16 @@ func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.Re
 		return false, 0, err
 	}
 	// send client greeting
-	io.WriteString(conn, rsyncwire.Greeting(opts.ProtocolVersion()))
+	io.WriteString(conn, rsyncwire.Greeting(opts.ProtocolVersion(), rsyncchecksum.AuthDigestList()))
 
 	// read server greeting
 	line, err := rd.ReadSlice('\n')
 	if err != nil {
 		return false, 0, fmt.Errorf("reading server greeting: %v", err)
 	}
-	serverGreeting := strings.TrimSpace(string(line))
-	const serverGreetingPrefix = "@RSYNCD: "
-	if !strings.HasPrefix(serverGreeting, serverGreetingPrefix) {
-		return false, 0, fmt.Errorf("invalid server greeting: got %q", serverGreeting)
-	}
-	serverGreeting = strings.TrimPrefix(serverGreeting, serverGreetingPrefix)
-	var remoteSub int32
-	if _, err := fmt.Sscanf(serverGreeting, "%d.%d", &remoteProtocol, &remoteSub); err != nil {
-		if _, err := fmt.Sscanf(serverGreeting, "%d", &remoteProtocol); err != nil {
-			return false, 0, fmt.Errorf("reading server greeting: %v", err)
-		}
+	remoteProtocol, serverDigests, err := rsyncwire.ParseGreeting(string(line))
+	if err != nil {
+		return false, 0, fmt.Errorf("reading server greeting: %v", err)
 	}
 	// ClientRun negotiates; checking here as well stops before the module
 	// request on a server we cannot talk to.
@@ -172,7 +163,16 @@ func startInbandExchange(osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.Re
 			if err != nil {
 				return false, 0, fmt.Errorf("authentication required: %v", err)
 			}
-			hash := generateAuthHash(pass, challenge)
+			// The digest both sides pick from the lists in their
+			// greetings (MD5 or MD4 when the server lists none).
+			digest, err := rsyncchecksum.NegotiateAuth(negotiated, serverDigests)
+			if err != nil {
+				return false, 0, err
+			}
+			if opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {
+				osenv.Logf("Client negotiated daemon auth checksum: %s", strings.TrimSuffix(digest, "-old"))
+			}
+			hash := rsyncchecksum.AuthResponse(digest, pass, challenge)
 			fmt.Fprintf(conn, "%s %s\n", authUser, hash)
 			continue
 		}
@@ -249,17 +249,4 @@ func getPassword(opts *rsyncopts.Options, urlPass string) (string, error) {
 		return p, nil
 	}
 	return "", fmt.Errorf("no password supplied (set RSYNC_PASSWORD or use --password-file)")
-}
-
-// generateAuthHash computes the rsync CSUM_MD4_OLD auth response:
-// MD4(seed + password + challenge), base64-encoded without padding.
-// CSUM_MD4_OLD prepends a 4-byte little-endian seed (0 for auth)
-// before the password and challenge data.
-func generateAuthHash(password, challenge string) string {
-	h := md4.New()
-	h.Write([]byte{0, 0, 0, 0})
-	h.Write([]byte(password))
-	h.Write([]byte(challenge))
-	digest := h.Sum(nil)
-	return base64.StdEncoding.WithPadding(base64.NoPadding).EncodeToString(digest)
 }

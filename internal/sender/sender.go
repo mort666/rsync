@@ -262,7 +262,7 @@ func (st *Transfer) sendFile(fileIndex int32, fl file) error {
 		return err
 	}
 
-	sh := rsynccommon.SumSizesSqroot(st.Conn.Session.Protocol, fi.Size())
+	sh := rsynccommon.SumSizesSqroot(st.Conn.Session.Protocol, fi.Size(), st.strong().Len())
 	if err := sh.WriteTo(st.Conn); err != nil {
 		return err
 	}

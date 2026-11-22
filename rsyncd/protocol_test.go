@@ -84,7 +84,7 @@ func daemonGreet(t *testing.T, greeting string) string {
 	}
 	defer conn.Close()
 	rd := bufio.NewReader(conn)
-	if line, err := rd.ReadString('\n'); err != nil || line != rsyncwire.Greeting(rsyncwire.MaxProtocolVersion) {
+	if line, err := rd.ReadString('\n'); err != nil || !strings.HasPrefix(line, fmt.Sprintf("@RSYNCD: %d.0 ", rsyncwire.MaxProtocolVersion)) {
 		t.Fatalf("server greeting: %q, %v", line, err)
 	}
 	if _, err := io.WriteString(conn, greeting+"mod\n"); err != nil {
@@ -107,7 +107,9 @@ func TestDaemonGreeting(t *testing.T) {
 		{"@RSYNCD: 30.0\n", "@RSYNCD: OK"},
 		{"@RSYNCD: 32.0 sha512 sha256 sha1 md5 md4\n", "@RSYNCD: OK"},
 		{"@RSYNCD: 26\n", "@ERROR: peer speaks protocol version 26, older than the oldest gokrazy/rsync supports (27)"},
-		{"@RSYNCD: 99\n", "@ERROR: protocol version mismatch"},
+		{"@RSYNCD: 99.0 md5\n", "@ERROR: protocol version mismatch"},
+		// From 30 rsync refuses a greeting without the sub-protocol.
+		{"@RSYNCD: 30\n", "@ERROR: your client omitted the subprotocol value"},
 		{"@RSYNCD: x\n", "@ERROR: protocol startup error"},
 	} {
 		if got := daemonGreet(t, tt.greeting); !strings.HasPrefix(got, tt.want) {

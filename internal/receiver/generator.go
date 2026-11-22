@@ -88,7 +88,8 @@ func (rt *Transfer) skipFile(f *File, st os.FileInfo) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		return bytes.Equal(f.Checksum[:], checksum[:]), nil
+		n := rt.strong().FileLen()
+		return bytes.Equal(f.Checksum[:n], checksum[:n]), nil
 	}
 
 	// TODO: size only
@@ -352,7 +353,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		// Match rsync/generator.c: in --append mode, send only the sum head;
 		// the sender skips block-match verification and infers the prefix size
 		// from ChecksumCount * BlockLength + RemainderLength.
-		sh := rsynccommon.SumSizesSqroot(rt.Conn.Session.Protocol, st.Size())
+		sh := rsynccommon.SumSizesSqroot(rt.Conn.Session.Protocol, st.Size(), rt.strong().Len())
 		return sh.WriteTo(rt.Conn)
 	}
 
@@ -450,7 +451,7 @@ func (rt *Transfer) changedFlags(f *File, st os.FileInfo) uint32 {
 
 // rsync/generator.c:generate_and_send_sums
 func (rt *Transfer) generateAndSendSums(in *os.File, fileLen int64) error {
-	sh := rsynccommon.SumSizesSqroot(rt.Conn.Session.Protocol, fileLen)
+	sh := rsynccommon.SumSizesSqroot(rt.Conn.Session.Protocol, fileLen, rt.strong().Len())
 	if err := sh.WriteTo(rt.Conn); err != nil {
 		return err
 	}
@@ -468,7 +469,7 @@ func (rt *Transfer) generateAndSendSums(in *os.File, fileLen int64) error {
 		if err := rt.Conn.WriteInt32(int32(sum1)); err != nil {
 			return err
 		}
-		if _, err := rt.Conn.Writer.Write(sum2); err != nil {
+		if _, err := rt.Conn.Writer.Write(sum2[:sh.ChecksumLength]); err != nil {
 			return err
 		}
 		remaining -= n1

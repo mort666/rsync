@@ -323,8 +323,10 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	}
 
 	// 1.   status byte, from protocol 28 two bytes when any of the upper
-	//      flags are set
-	if proto >= 28 && xflags&0xff00 != 0 {
+	//      flags are set, or a varint with CF_VARINT_FLIST_FLAGS
+	if s.conn.Session.CompatFlags&rsyncwire.CfVarintFlistFlags != 0 {
+		s.fec.WriteVarint(int32(xflags))
+	} else if proto >= 28 && xflags&0xff00 != 0 {
 		xflags |= rsync.XMIT_EXTENDED_FLAGS
 		s.fec.WriteByte(byte(xflags))
 		s.fec.WriteByte(byte(xflags >> 8))
@@ -590,7 +592,15 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 	// a safe file list, an I/O error ends it instead, carrying the error.
 	proto := st.Conn.Session.Protocol
 	errInTrailer := proto >= 30 && ioErrors != 0 && st.Conn.Session.SafeFlist()
-	if errInTrailer {
+	if st.Conn.Session.CompatFlags&rsyncwire.CfVarintFlistFlags != 0 {
+		// A 0 and then the I/O error, or 0.
+		fec.WriteVarint(0)
+		if errInTrailer {
+			fec.WriteVarint(ioErrors)
+		} else {
+			fec.WriteVarint(0)
+		}
+	} else if errInTrailer {
 		fec.WriteByte(rsync.XMIT_EXTENDED_FLAGS)
 		fec.WriteByte(rsync.XMIT_IO_ERROR_ENDLIST >> 8)
 		fec.WriteVarint(ioErrors)

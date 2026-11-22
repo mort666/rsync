@@ -20,10 +20,10 @@ func TestServerCompatFlags(t *testing.T) {
 		want       uint32
 	}{
 		{"", 0},
-		{ClientCapabilities, CfSafeFlist | CfChksumSeedFix},
-		// rsync 3.2+: everything it offers but f and C stays off,
-		// including v (name negotiation) and i (incremental recursion).
-		{".iLsfxCIvu", CfSafeFlist | CfChksumSeedFix},
+		{ClientCapabilities, CfSafeFlist | CfChksumSeedFix | CfVarintFlistFlags},
+		// rsync 3.2+: everything it offers but f, C and v stays off,
+		// including i (incremental recursion).
+		{".iLsfxCIvu", CfSafeFlist | CfChksumSeedFix | CfVarintFlistFlags},
 		// rsync 3.0.9 offers no C: block sums keep the old seed order.
 		{".iLsf", CfSafeFlist},
 	} {
@@ -41,8 +41,9 @@ func TestReadCompatFlags(t *testing.T) {
 		{CfSafeFlist | CfChksumSeedFix, ""},
 		// rsync's server sets these whatever the client offered.
 		{CfSafeFlist | CfSymlinkTimes | CfSymlinkIconv, ""},
+		{CfSafeFlist | CfVarintFlistFlags, ""},
 		{CfIncRecurse, "not offered"},
-		{CfVarintFlistFlags, "not offered"},
+		{CfID0Names, "not offered"},
 	} {
 		var buf bytes.Buffer
 		buf.Write(AppendVarint(nil, tt.flags))
@@ -63,11 +64,34 @@ func TestReadCompatFlags(t *testing.T) {
 }
 
 func TestGreeting(t *testing.T) {
-	if got := Greeting(29); got != "@RSYNCD: 29\n" {
-		t.Errorf("Greeting(29) = %q", got)
-	}
-	if got := Greeting(30); got != "@RSYNCD: 30.0\n" {
+	if got := Greeting(30, "sha512 md5"); got != "@RSYNCD: 30.0 sha512 md5\n" {
 		t.Errorf("Greeting(30) = %q", got)
+	}
+	for _, tt := range []struct {
+		line    string
+		proto   int32
+		digests string
+		wantErr string
+	}{
+		{"@RSYNCD: 27\n", 27, "", ""},
+		{"@RSYNCD: 29.0\n", 29, "", ""},
+		{"@RSYNCD: 31.0\n", 31, "", ""},
+		{"@RSYNCD: 32.0 sha512 sha256 sha1 md5 md4\n", 32, "sha512 sha256 sha1 md5 md4", ""},
+		{"@RSYNCD: 30\n", 0, "", "omitted the subprotocol"},
+		{"@RSYNCD: 32.0\n", 0, "", "omitted the digest name list"},
+		{"@RSYNCD: x\n", 0, "", "invalid greeting"},
+		{"hello\n", 0, "", "invalid greeting"},
+	} {
+		proto, digests, err := ParseGreeting(tt.line)
+		if tt.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ParseGreeting(%q): error %v, want %q", tt.line, err, tt.wantErr)
+			}
+			continue
+		}
+		if err != nil || proto != tt.proto || digests != tt.digests {
+			t.Errorf("ParseGreeting(%q) = %d, %q, %v; want %d, %q", tt.line, proto, digests, err, tt.proto, tt.digests)
+		}
 	}
 }
 

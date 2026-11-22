@@ -15,6 +15,12 @@ require (
 )
 
 require (
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
+	github.com/zeebo/xxh3 v1.1.0 // indirect
+)
+
+require (
 	github.com/landlock-lsm/go-landlock v0.0.0-20250303204525-1544bccde3a3
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.70 // indirect
 )

@@ -115,6 +115,10 @@ func (o *Options) ServerOptions() []string {
 		sargv = append(sargv, argstr)
 	}
 
+	if o.checksum_choice != "" {
+		sargv = append(sargv, "--checksum-choice="+o.checksum_choice)
+	}
+
 	if o.Sender() && o.DoFsync() {
 		sargv = append(sargv, "--fsync")
 	}

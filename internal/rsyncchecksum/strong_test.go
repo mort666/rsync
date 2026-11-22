@@ -33,6 +33,9 @@ func TestStrong(t *testing.T) {
 		{"30", rsyncwire.Session{Protocol: 30}, seed, md(data, seedLE), md(data), md(data)},
 		{"30 seed fix", rsyncwire.Session{Protocol: 30, CompatFlags: rsyncwire.CfChksumSeedFix}, seed, md(seedLE, data), md(data), md(data)},
 		{"30 zero seed", rsyncwire.Session{Protocol: 30, CompatFlags: rsyncwire.CfChksumSeedFix}, 0, md(data), md(data), md(data)},
+		// A named md5 puts the seed first, as rsync's OpenSSL path does.
+		{"29 named md5", rsyncwire.Session{Protocol: 29, Checksum: "md5"}, seed, md(seedLE, data), md(data), md(data)},
+		{"30 named md5 no fix", rsyncwire.Session{Protocol: 30, Checksum: "md5"}, seed, md(seedLE, data), md(data), md(data)},
 	} {
 		s := NewStrong(tt.sess, tt.seed)
 		if got := s.Block(data); !bytes.Equal(got, tt.block) {

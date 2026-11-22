@@ -24,6 +24,7 @@ import (
 	"github.com/gokrazy/rsync/internal/log"
 	"github.com/gokrazy/rsync/internal/progress"
 	"github.com/gokrazy/rsync/internal/receiver"
+	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
@@ -226,23 +227,23 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	rd := conn.rd
 	// send server greeting
 
-	io.WriteString(cwr, rsyncwire.Greeting(rsyncwire.MaxProtocolVersion))
+	io.WriteString(cwr, rsyncwire.Greeting(rsyncwire.MaxProtocolVersion, rsyncchecksum.AuthDigestList()))
 
 	// read client greeting
 	clientGreeting, err := rd.ReadSlice('\n')
 	if err != nil {
 		return err
 	}
-	got, ok := strings.CutPrefix(strings.TrimSpace(string(clientGreeting)), "@RSYNCD: ")
-	if !ok {
-		return fmt.Errorf("invalid client greeting: got %q", clientGreeting)
-	}
-	// A greeting from protocol 30 on reads "31.0", from 3.2.7 on followed by
-	// a list of auth digests. Only the major version matters here.
-	var remoteProtocol int32
-	if _, err := fmt.Sscanf(got, "%d", &remoteProtocol); err != nil {
-		io.WriteString(cwr, "@ERROR: protocol startup error\n")
-		return fmt.Errorf("invalid client greeting: got %q", clientGreeting)
+	// From protocol 30 the greeting reads "31.0", from rsync 3.2.7 on
+	// followed by the client's auth digests.
+	remoteProtocol, clientDigests, err := rsyncwire.ParseGreeting(string(clientGreeting))
+	if err != nil {
+		if strings.Contains(err.Error(), "omitted") {
+			fmt.Fprintf(cwr, "@ERROR: your client %s\n", strings.TrimPrefix(err.Error(), "the peer "))
+		} else {
+			io.WriteString(cwr, "@ERROR: protocol startup error\n")
+		}
+		return fmt.Errorf("invalid client greeting: %v", err)
 	}
 	// handleConn negotiates again once the client's --protocol is known.
 	// Checking now refuses a client we cannot talk to before it picks a
@@ -278,7 +279,7 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	}
 
 	if len(module.AuthUsers) > 0 {
-		if err := s.authServer(rd, cwr, &module, conn.name); err != nil {
+		if err := s.authServer(rd, cwr, &module, conn.name, greeted, clientDigests); err != nil {
 			fmt.Fprintf(cwr, "@ERROR: auth failed on module %s\n", module.Name)
 			return err
 		}
@@ -460,6 +461,12 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 
 	if err := c.WriteCompatFlags(opts.ShellCommand()); err != nil {
 		return err
+	}
+	if err := rsyncchecksum.Negotiate(c, opts.ChecksumChoice(), true); err != nil {
+		return err
+	}
+	if opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {
+		s.logger.Printf("Server checksum: %s", rsyncchecksum.NewStrong(c.Session, 0).Name())
 	}
 	if err := c.WriteInt32(sessionChecksumSeed); err != nil {
 		return err
@@ -763,7 +770,12 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	}
 }
 
-func (s *Server) authServer(rd *bufio.Reader, cwr io.Writer, module *Module, remoteAddr string) error {
+func (s *Server) authServer(rd *bufio.Reader, cwr io.Writer, module *Module, remoteAddr string, proto int32, clientDigests string) error {
+	digest, err := rsyncchecksum.NegotiateAuth(proto, clientDigests)
+	if err != nil {
+		fmt.Fprintf(cwr, "@ERROR: your client does not support one of our daemon-auth checksums: %s\n", rsyncchecksum.AuthDigestList())
+		return err
+	}
 	challenge := genChallenge()
 	fmt.Fprintf(cwr, "@RSYNCD: AUTHREQD %s\n", challenge)
 
@@ -800,7 +812,7 @@ func (s *Server) authServer(rd *bufio.Reader, cwr io.Writer, module *Module, rem
 		return fmt.Errorf("auth failed")
 	}
 
-	expected := authHash(secret, challenge)
+	expected := rsyncchecksum.AuthResponse(digest, secret, challenge)
 	if response != expected {
 		s.logger.Printf("auth failed on module %s from %s for %s: password mismatch", module.Name, remoteAddr, user)
 		return fmt.Errorf("auth failed")
@@ -816,14 +828,6 @@ func genChallenge() string {
 	h := md4.New()
 	h.Write([]byte{0, 0, 0, 0})
 	h.Write(buf[:])
-	return base64.StdEncoding.WithPadding(base64.NoPadding).EncodeToString(h.Sum(nil))
-}
-
-func authHash(password, challenge string) string {
-	h := md4.New()
-	h.Write([]byte{0, 0, 0, 0})
-	h.Write([]byte(password))
-	h.Write([]byte(challenge))
 	return base64.StdEncoding.WithPadding(base64.NoPadding).EncodeToString(h.Sum(nil))
 }
 

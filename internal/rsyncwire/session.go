@@ -1,6 +1,10 @@
 package rsyncwire
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // Protocol versions this implementation can speak.
 const (
@@ -30,6 +34,13 @@ type Session struct {
 	// CompatFlags are the CF_* flags the server chose from protocol 30
 	// (compat.c:setup_protocol).
 	CompatFlags uint32
+
+	// Checksum is the negotiated strong checksum for block and transfer
+	// sums (see rsyncchecksum.Names), or "" for the protocol's default.
+	// FileChecksum is the one for --checksum file sums; the two only
+	// differ with --checksum-choice=xfer,file.
+	Checksum     string
+	FileChecksum string
 }
 
 // Compat flags (compat.c), which a server sends from protocol 30. It picks
@@ -48,15 +59,16 @@ const (
 
 // ClientCapabilities is what a gokrazy/rsync client offers in its -e option
 // from protocol 30, as rsync's options.c:maybe_add_e_option builds it, but
-// with only the letters this implementation handles. No 'i' (incremental
-// recursion), 'L', 's', 'x', 'I', 'u', and no 'v' yet: 'v' makes the server
-// negotiate checksum and compression names.
-const ClientCapabilities = "e.fC"
+// with only the letters this implementation handles: 'f' (safe file list),
+// 'C' (checksum seed order fix) and 'v' (varint file-list flags, and
+// checksum and compression name negotiation). No 'i' (incremental
+// recursion), 'L', 's', 'x', 'I' or 'u'.
+const ClientCapabilities = "e.fCv"
 
 // ServerCompatFlags picks the compat flags a server sends for the
 // capability letters in the client's -e value (shell_cmd), only those this
-// implementation handles: 'f' and 'C'. A client offering more, such as
-// rsync's "e.LsfxCIvu", gets the rest turned off, which it accepts.
+// implementation handles: 'f', 'C' and 'v'. A client offering more, such
+// as rsync's "e.LsfxCIvu", gets the rest turned off, which it accepts.
 func ServerCompatFlags(clientInfo string) uint32 {
 	var flags uint32
 	for _, c := range clientInfo {
@@ -65,6 +77,8 @@ func ServerCompatFlags(clientInfo string) uint32 {
 			flags |= CfSafeFlist
 		case 'C':
 			flags |= CfChksumSeedFix
+		case 'v':
+			flags |= CfVarintFlistFlags
 		}
 	}
 	return flags
@@ -136,12 +150,38 @@ func NegotiateProtocol(side string, ours, remote int32) (int32, error) {
 }
 
 // Greeting is the "@RSYNCD:" line a daemon or daemon client starts with for
-// protocol version proto. From protocol 30 rsync requires the sub-protocol
-// too ("30.0"); gokrazy/rsync speaks only final protocol versions, so it is
-// always 0.
-func Greeting(proto int32) string {
-	if proto >= 30 {
-		return fmt.Sprintf("@RSYNCD: %d.0\n", proto)
+// protocol version proto, as rsync 3.2.7 and newer send it: version,
+// sub-protocol (always 0, as gokrazy/rsync speaks only final protocol
+// versions) and the auth digests this side supports. Older peers read the
+// version alone.
+func Greeting(proto int32, authDigests string) string {
+	return fmt.Sprintf("@RSYNCD: %d.0 %s\n", proto, authDigests)
+}
+
+// ParseGreeting reads a peer's "@RSYNCD:" line (clientserver.c
+// exchange_protocols): the version, and the auth digests it lists, if any.
+// From protocol 30 the sub-protocol must be there, and above 31 the digest
+// list too.
+func ParseGreeting(line string) (proto int32, digests string, err error) {
+	rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r\n"), "@RSYNCD: ")
+	if !ok {
+		return 0, "", fmt.Errorf("invalid greeting %q", line)
 	}
-	return fmt.Sprintf("@RSYNCD: %d\n", proto)
+	version, digests, _ := strings.Cut(rest, " ")
+	major, sub, hasSub := strings.Cut(version, ".")
+	p, err := strconv.ParseInt(major, 10, 32)
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid greeting %q", line)
+	}
+	if hasSub {
+		if _, err := strconv.ParseInt(sub, 10, 32); err != nil {
+			return 0, "", fmt.Errorf("invalid greeting %q", line)
+		}
+	} else if p >= 30 {
+		return 0, "", fmt.Errorf("the peer omitted the subprotocol value: %q", line)
+	}
+	if digests == "" && p > 31 {
+		return 0, "", fmt.Errorf("the peer omitted the digest name list: %q", line)
+	}
+	return int32(p), strings.TrimSpace(digests), nil
 }

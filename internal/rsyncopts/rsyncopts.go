@@ -777,6 +777,9 @@ func (o *Options) PasswordFile() string  { return o.password_file }
 func (o *Options) XferDirs() int         { return o.xfer_dirs }
 func (o *Options) FilterRules() []string { return o.filterRules }
 
+// ChecksumChoice is --checksum-choice: "xfer" or "xfer,file", or "".
+func (o *Options) ChecksumChoice() string { return o.checksum_choice }
+
 // ProtocolVersion is the protocol version this side announces:
 // rsyncwire.MaxProtocolVersion unless --protocol asked for another.
 func (o *Options) ProtocolVersion() int32 { return int32(o.protocol_version) }
@@ -994,8 +997,8 @@ func (o *Options) gokrazyTable() []poptOption {
 		{"checksum", "c", POPT_ARG_VAL, &o.always_checksum, 1},
 		{"no-checksum", "", POPT_ARG_VAL, &o.always_checksum, 0},
 		{"no-c", "", POPT_ARG_VAL, &o.always_checksum, 0},
-		//{"checksum-choice", "", POPT_ARG_STRING, &o.checksum_choice, 0},
-		//{"cc", "", POPT_ARG_STRING, &o.checksum_choice, 0},
+		{"checksum-choice", "", POPT_ARG_STRING, &o.checksum_choice, 0},
+		{"cc", "", POPT_ARG_STRING, &o.checksum_choice, 0},
 		//{"block-size", "B", POPT_ARG_STRING, nil, OPT_BLOCK_SIZE},
 		//{"compare-dest", "", POPT_ARG_STRING, nil, OPT_COMPARE_DEST},
 		//{"copy-dest", "", POPT_ARG_STRING, nil, OPT_COPY_DEST},

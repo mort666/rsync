@@ -16,6 +16,7 @@ import (
 	"github.com/gokrazy/rsync/internal/progress"
 	"github.com/gokrazy/rsync/internal/receiver"
 	"github.com/gokrazy/rsync/internal/restrict"
+	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncos"
 	"github.com/gokrazy/rsync/internal/rsyncstats"
@@ -342,6 +343,12 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 
 	if err := c.ReadCompatFlags(); err != nil {
 		return nil, nil, fmt.Errorf("reading compat flags: %v", err)
+	}
+	if err := rsyncchecksum.Negotiate(c, opts.ChecksumChoice(), false); err != nil {
+		return nil, nil, err
+	}
+	if opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {
+		osenv.Logf("Client checksum: %s", rsyncchecksum.NewStrong(c.Session, 0).Name())
 	}
 	seed, err := c.ReadInt32()
 	if err != nil {
