@@ -38,6 +38,13 @@ func sharesInode(t *testing.T, dest, prev string) map[string]bool {
 // the first backup, must be what stock rsync's own run leaves.
 func TestAltDest(t *testing.T) {
 	rsynctest.TridgeOrGTFO(t, "compares with stock rsync")
+	if v := rsynctest.RsyncVersion(t); strings.HasPrefix(v, "3.4.3") {
+		// 3.4.3's secure open rejects a relative alternate folder with
+		// "..", such as --link-dest=../prev, even against itself: a
+		// false "failed verification" when it receives as a client,
+		// nothing linked as a daemon. Fixed in 3.4.4 (rsync #915).
+		t.Skip("stock rsync 3.4.3 cannot use ../ alternate folders")
+	}
 	src := filepath.Join(t.TempDir(), "src")
 	write := func(name, content string, perm os.FileMode) {
 		t.Helper()
