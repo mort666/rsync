@@ -363,10 +363,17 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 
 	// 6.   file modification time (optional, integer; from protocol 30 a
 	//      varlong, which does not run out in 2038)
+	// A file system without times (an fs.FS such as fstest.MapFS) gives
+	// Go's zero time, the year 1, which receivers cannot set (Windows
+	// refuses it). Send the Unix epoch instead.
+	var mtime int64
+	if t := info.ModTime(); !t.IsZero() {
+		mtime = t.Unix()
+	}
 	if proto >= 30 {
-		s.fec.WriteVarlong(info.ModTime().Unix(), 4)
+		s.fec.WriteVarlong(mtime, 4)
 	} else {
-		s.fec.WriteInt32(int32(info.ModTime().Unix()))
+		s.fec.WriteInt32(int32(mtime))
 	}
 
 	// 7.   file mode (optional, mode_t, integer)

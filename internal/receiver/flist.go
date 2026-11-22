@@ -23,8 +23,11 @@ func sortFileList(proto int32, fileList []*File) {
 	})
 }
 
+// entry is f as the sender sorts it: by the name as sent, with forward
+// slashes. f.Name is a local path, which on Windows has backslashes, and
+// rsync's order splits names at '/' only.
 func (f *File) entry() flistcmp.Entry {
-	return flistcmp.Entry{Name: f.Name, IsDir: f.Mode&rsync.S_IFMT == rsync.S_IFDIR}
+	return flistcmp.Entry{Name: filepath.ToSlash(f.Name), IsDir: f.Mode&rsync.S_IFMT == rsync.S_IFDIR}
 }
 
 type File struct {
