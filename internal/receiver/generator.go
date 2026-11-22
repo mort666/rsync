@@ -135,10 +135,15 @@ func (rt *Transfer) setPerms(f *File, perm fs.FileMode) error {
 	isLink := f.Mode&rsync.S_IFMT == rsync.S_IFLNK && !rt.Opts.FakeSuper
 	isDir := f.Mode&rsync.S_IFMT == rsync.S_IFDIR
 	if rt.Opts.PreserveTimes &&
-		!isLink &&
 		!(isDir && rt.Opts.OmitDirTimes) &&
 		!st.ModTime().Equal(f.ModTime) {
-		if err := rt.DestRoot.Chtimes(f.Name, f.ModTime, f.ModTime); err != nil {
+		set := rt.DestRoot.Chtimes
+		// rsync sets times without following a link, so with -K a
+		// folder's times go on the link standing for it.
+		if isLink || st.Mode()&fs.ModeSymlink != 0 {
+			set = func(name string, _, mtime time.Time) error { return rt.lchtimes(name, mtime) }
+		}
+		if err := set(f.Name, f.ModTime, f.ModTime); err != nil {
 			return err
 		}
 	}

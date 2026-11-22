@@ -87,10 +87,12 @@ func fakeSuperTree(t *testing.T) string {
 }
 
 // snapshot describes a tree as it is on disk, one line per entry: type,
-// mode, owner, size, mtime (not for folders, which the receivers touch in
+// mode, owner, size, mtime (symlinks' too, not for folders, which the receivers touch in
 // different orders), content or link target, and user xattrs.
 func snapshot(t *testing.T, root string) map[string]string {
 	t.Helper()
+	// rsync sets symlink times from 3.0 (CAN_SET_SYMLINK_TIMES).
+	linkTimes := stockMaxProtocol(t) >= 30
 	snap := map[string]string{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -114,6 +116,9 @@ func snapshot(t *testing.T, root string) map[string]string {
 		case info.Mode().Type() == fs.ModeSymlink:
 			target, _ := os.Readlink(path)
 			fmt.Fprintf(&b, " target=%q", target)
+			if linkTimes {
+				fmt.Fprintf(&b, " mtime=%d", info.ModTime().Unix())
+			}
 		}
 		x := lxattrs(t, path, "user.")
 		for _, name := range slices.Sorted(maps.Keys(x)) {

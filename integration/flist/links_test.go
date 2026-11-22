@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gokrazy/rsync/internal/rsynctest"
 	"github.com/gokrazy/rsync/rsyncclient"
 	"github.com/gokrazy/rsync/rsyncd"
+	"golang.org/x/sys/unix"
 )
 
 // linkTree makes a source with symlinks of every kind -L, -k and
@@ -165,7 +167,13 @@ func TestKeepDirlinks(t *testing.T) {
 		if err := os.Mkdir(filepath.Join(dest, "real"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink("real", filepath.Join(dest, "linked")); err != nil {
+		link := filepath.Join(dest, "linked")
+		if err := os.Symlink("real", link); err != nil {
+			t.Fatal(err)
+		}
+		// The link stays as it is, so its time must not tell copies apart.
+		ts := unix.NsecToTimespec(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano())
+		if err := unix.UtimesNanoAt(unix.AT_FDCWD, link, []unix.Timespec{ts, ts}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			t.Fatal(err)
 		}
 		return dest
