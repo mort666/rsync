@@ -101,7 +101,7 @@ func TestChecksumList(t *testing.T) {
 	if p, err := strconv.Atoi(os.Getenv("RSYNC_MATRIX_PROTOCOL")); err == nil && p < 30 {
 		t.Skip("nothing is negotiated below protocol 30")
 	}
-	for _, cc := range []string{"sha3-512", "sha3-384", "sha3-256", "sha1"} {
+	for _, cc := range []string{"sha3-512", "sha3-384", "sha3-256", "sha256", "sha1"} {
 		t.Run(cc, func(t *testing.T) {
 			if !slicesContains(stockChecksums(t), cc) {
 				t.Skipf("stock rsync has no %s", cc)

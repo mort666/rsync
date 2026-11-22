@@ -3,6 +3,7 @@ package rsyncchecksum
 import (
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/sha3"
 	"encoding/binary"
 	"hash"
@@ -70,13 +71,14 @@ const maxBlockSumLen = 16
 // from the other's list they rank highest themselves, so they only agree
 // if they rank names in the same order: this list may leave names out but
 // must never reorder them. rsync also has "xxhash" (an alias of xxh64) and
-// "none". sha1 and the SHA-3 sums come with OpenSSL in rsync; the SHA-3
-// ones arrive with rsync 4.0.
-var Names = []string{"xxh128", "xxh3", "xxh64", "sha3-512", "sha3-384", "sha3-256", "md5", "md4", "sha1"}
+// "none". sha1, sha256 and the SHA-3 sums come with OpenSSL in rsync;
+// sha256 and the SHA-3 ones arrive with rsync 4.0, offered only when asked
+// for.
+var Names = []string{"xxh128", "xxh3", "xxh64", "sha3-512", "sha3-384", "sha3-256", "sha256", "md5", "md4", "sha1"}
 
 // explicitOnly are the names a side offers only when asked to, in
 // RSYNC_CHECKSUM_LIST or --checksum-choice (NNI_EXPLICIT_ONLY).
-var explicitOnly = []string{"sha3-512", "sha3-384", "sha3-256"}
+var explicitOnly = []string{"sha3-512", "sha3-384", "sha3-256", "sha256"}
 
 // DefaultNames is the list a side offers without RSYNC_CHECKSUM_LIST:
 // Names without the explicit-only ones.
@@ -156,7 +158,7 @@ func (s Strong) Len() int {
 		return 8
 	case "sha1":
 		return 20
-	case "sha3-256":
+	case "sha3-256", "sha256":
 		return 32
 	case "sha3-384":
 		return 48
@@ -190,7 +192,7 @@ func (s Strong) Block(buf []byte) []byte {
 		return binary.LittleEndian.AppendUint64(nil, xxh3.HashSeed(buf, s.xxhSeed()))
 	case "xxh128":
 		return appendUint128(nil, xxh3.Hash128Seed(buf, s.xxhSeed()))
-	case "sha1", "sha3-256", "sha3-384", "sha3-512":
+	case "sha1", "sha256", "sha3-256", "sha3-384", "sha3-512":
 		// OpenSSL's digests, which take the seed first
 		// (get_checksum2, xfer_sum_evp_md).
 		h := newHash(s.name)
@@ -257,6 +259,8 @@ func newHash(name string) hash.Hash {
 		return md5.New()
 	case "sha1":
 		return sha1.New()
+	case "sha256":
+		return sha256.New()
 	case "sha3-256":
 		return sha3.New256()
 	case "sha3-384":

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/sha3"
 	"encoding/binary"
 	"hash"
@@ -26,6 +27,7 @@ func TestStrong(t *testing.T) {
 		return func(parts ...[]byte) []byte { h := nh(); h.Write(bytes.Join(parts, nil)); return sum(h) }
 	}
 	s1 := with(sha1.New)
+	s2 := with(sha256.New)
 	s3a := with(func() hash.Hash { return sha3.New256() })
 	s3b := with(func() hash.Hash { return sha3.New384() })
 	s3c := with(func() hash.Hash { return sha3.New512() })
@@ -51,6 +53,7 @@ func TestStrong(t *testing.T) {
 		{"sha1", rsyncwire.Session{Protocol: 31, Checksum: "sha1"}, seed, s1(seedLE, data), s1(data), s1(data)},
 		{"sha1 zero seed", rsyncwire.Session{Protocol: 31, Checksum: "sha1"}, 0, s1(data), s1(data), s1(data)},
 		{"sha1 at 27", rsyncwire.Session{Protocol: 27, Checksum: "sha1"}, seed, s1(seedLE, data), s1(data), s1(data)},
+		{"sha256", rsyncwire.Session{Protocol: 32, Checksum: "sha256"}, seed, s2(seedLE, data), s2(data), s2(data)},
 		{"sha3-256", rsyncwire.Session{Protocol: 32, Checksum: "sha3-256"}, seed, s3a(seedLE, data), s3a(data), s3a(data)},
 		{"sha3-384", rsyncwire.Session{Protocol: 32, Checksum: "sha3-384"}, seed, s3b(seedLE, data), s3b(data), s3b(data)},
 		{"sha3-512", rsyncwire.Session{Protocol: 33, Checksum: "sha3-512"}, seed, s3c(seedLE, data), s3c(data), s3c(data)},
@@ -79,7 +82,7 @@ func TestLen(t *testing.T) {
 		len, blockLen int
 	}{
 		{"xxh64", 8, 8}, {"xxh3", 8, 8}, {"xxh128", 16, 16}, {"md5", 16, 16}, {"md4", 16, 16},
-		{"sha1", 20, 16}, {"sha3-256", 32, 16}, {"sha3-384", 48, 16}, {"sha3-512", 64, 16},
+		{"sha1", 20, 16}, {"sha256", 32, 16}, {"sha3-256", 32, 16}, {"sha3-384", 48, 16}, {"sha3-512", 64, 16},
 	} {
 		s := NewStrong(rsyncwire.Session{Protocol: 32, Checksum: tt.name}, 1)
 		if s.Len() != tt.len || s.BlockLen() != tt.blockLen || len(s.Block([]byte("x"))) != tt.len {

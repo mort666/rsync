@@ -13,7 +13,7 @@ import (
 // valid_auth_checksums_items, rsync master for 4.0.0, which adds SHA-3 to
 // 3.5.2's), aliases and all.
 var (
-	upstreamChecksums = []string{"xxh128", "xxh3", "xxh64", "xxhash", "sha3-512", "sha3-384", "sha3-256", "md5", "md4", "sha1", "none"}
+	upstreamChecksums = []string{"xxh128", "xxh3", "xxh64", "xxhash", "sha3-512", "sha3-384", "sha3-256", "sha256", "md5", "md4", "sha1", "none"}
 	upstreamAuth      = []string{"sha512", "sha256", "sha1", "md5", "md4"}
 )
 
@@ -53,7 +53,7 @@ func TestPickName(t *testing.T) {
 		{"sha1 none", "sha1", true},
 		{"none", "", false},
 		// Not offered unless asked for, so never picked from the defaults.
-		{"sha3-512 sha3-256", "", false},
+		{"sha3-512 sha3-256 sha256", "", false},
 		{"", "", false},
 	} {
 		got, ok := rsyncwire.PickName(DefaultNames, tt.peer)
@@ -145,6 +145,7 @@ func TestNegotiateChoice(t *testing.T) {
 		{"auto,xxh128", "", "xxh128"},
 		{"sha1", "sha1", "sha1"},
 		{"SHA3-256,sha3-512", "sha3-256", "sha3-512"},
+		{"sha256", "sha256", "sha256"},
 	} {
 		c := &rsyncwire.Conn{Session: rsyncwire.Session{Protocol: 30}}
 		if err := Negotiate(c, tt.choice, false); err != nil || c.Session.Checksum != tt.xfer || c.Session.FileChecksum != tt.file {
