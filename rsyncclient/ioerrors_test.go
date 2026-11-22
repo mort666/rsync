@@ -111,10 +111,7 @@ func TestResultIOErrorsFromStockRsync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A relative path: rsync on Windows does not take "C:\\...".
-	t.Chdir(src)
-	cmd := exec.Command("rsync", client.ServerCommandOptions("./")...)
-	cmd.Stderr = testlogger.New(t)
+	cmd := exec.Command("rsync", client.ServerCommandOptions(src+"/")...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdin, err := cmd.StdinPipe()
@@ -155,7 +152,10 @@ func TestResultIOErrorsZeroWhenComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("rsync", client.ServerCommandOptions(src+"/")...)
+	// A relative path: rsync on Windows cannot reach "C:\...\" (exit 23).
+	t.Chdir(src)
+	cmd := exec.Command("rsync", client.ServerCommandOptions("./")...)
+	cmd.Stderr = testlogger.New(t)
 	stdin, _ := cmd.StdinPipe()
 	stdout, _ := cmd.StdoutPipe()
 	if err := cmd.Start(); err != nil {
