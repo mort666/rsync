@@ -38,7 +38,7 @@ func Negotiate(c *rsyncwire.Conn, choice string, isServer bool) error {
 	if c.Session.CompatFlags&rsyncwire.CfVarintFlistFlags == 0 {
 		return nil
 	}
-	ours := rsyncwire.OurList(os.Getenv("RSYNC_CHECKSUM_LIST"), isServer, Names)
+	ours := rsyncwire.OurList(os.Getenv("RSYNC_CHECKSUM_LIST"), isServer, Names, DefaultNames)
 	name, err := c.NegotiateName("checksum", ours, isServer)
 	if err != nil {
 		return err

@@ -49,7 +49,7 @@ func Negotiate(c *rsyncwire.Conn, choice string, level int, isServer, isSender b
 			s.Compress = "zlib"
 			break
 		}
-		ours := rsyncwire.OurList(os.Getenv("RSYNC_COMPRESS_LIST"), isServer, supported(isSender))
+		ours := rsyncwire.OurList(os.Getenv("RSYNC_COMPRESS_LIST"), isServer, supported(isSender), supported(isSender))
 		name, err := c.NegotiateName("compress", ours, isServer)
 		if err != nil {
 			return err

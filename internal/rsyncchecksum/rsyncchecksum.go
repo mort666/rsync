@@ -2,6 +2,8 @@ package rsyncchecksum
 
 import (
 	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha3"
 	"encoding/binary"
 	"hash"
 	"io"
@@ -56,15 +58,29 @@ func Checksum1(buf []byte) uint32 {
 	return (s1 & 0xffff) + (s2 << 16)
 }
 
-const Size = md4.Size
+// MaxLen is the longest strong sum, sha3-512's (MAX_DIGEST_LEN).
+const MaxLen = 64
+
+// maxBlockSumLen is the most of a strong sum a block sum carries
+// (SUM_LENGTH): rsync's generator never sends more, whatever the checksum.
+const maxBlockSumLen = 16
 
 // The strong checksums, by the names rsync negotiates them with, in rsync's
 // table order (checksum.c valid_checksums_items). Both sides pick the name
 // from the other's list they rank highest themselves, so they only agree
 // if they rank names in the same order: this list may leave names out but
-// must never reorder them. rsync also has "xxhash" (an alias of xxh64),
-// "sha1" (with OpenSSL) and "none".
-var Names = []string{"xxh128", "xxh3", "xxh64", "md5", "md4"}
+// must never reorder them. rsync also has "xxhash" (an alias of xxh64) and
+// "none". sha1 and the SHA-3 sums come with OpenSSL in rsync; the SHA-3
+// ones arrive with rsync 4.0.
+var Names = []string{"xxh128", "xxh3", "xxh64", "sha3-512", "sha3-384", "sha3-256", "md5", "md4", "sha1"}
+
+// explicitOnly are the names a side offers only when asked to, in
+// RSYNC_CHECKSUM_LIST or --checksum-choice (NNI_EXPLICIT_ONLY).
+var explicitOnly = []string{"sha3-512", "sha3-384", "sha3-256"}
+
+// DefaultNames is the list a side offers without RSYNC_CHECKSUM_LIST:
+// Names without the explicit-only ones.
+var DefaultNames = slices.DeleteFunc(slices.Clone(Names), func(n string) bool { return slices.Contains(explicitOnly, n) })
 
 // md4Old is the MD4 of protocols 27 to 29, which seeds the whole-file sum
 // (CSUM_MD4_OLD); a negotiated "md4" does not.
@@ -107,6 +123,9 @@ func NewStrong(s rsyncwire.Session, seed int32) Strong {
 	// get_checksum2, xfer_sum_evp_md). rsync built without OpenSSL follows
 	// the flag there too, and does not interoperate with its OpenSSL builds
 	// for a named md5 below protocol 30.
+	//
+	// sha1 and the SHA-3 sums only exist through OpenSSL, so they always
+	// put the seed first (Block).
 	seedFirst := s.CompatFlags&rsyncwire.CfChksumSeedFix != 0 || s.Checksum == "md5"
 	return Strong{
 		name:      name,
@@ -129,14 +148,27 @@ func Supported(name string) bool {
 	return slices.Contains(Names, name)
 }
 
-// Len is the length of a sum (checksum.c:csum_len_for_type).
+// Len is the length of a sum (checksum.c:csum_len_for_type). A block sum
+// carries at most 16 bytes of it (see BlockLen).
 func (s Strong) Len() int {
 	switch s.name {
 	case "xxh64", "xxh3":
 		return 8
+	case "sha1":
+		return 20
+	case "sha3-256":
+		return 32
+	case "sha3-384":
+		return 48
+	case "sha3-512":
+		return 64
 	}
 	return 16
 }
+
+// BlockLen is the most of a sum a block sum may carry: the sum's length,
+// but no more than 16 (SUM_LENGTH).
+func (s Strong) BlockLen() int { return min(s.Len(), maxBlockSumLen) }
 
 func (s Strong) seedBytes() []byte {
 	return binary.LittleEndian.AppendUint32(nil, uint32(s.seed))
@@ -158,6 +190,15 @@ func (s Strong) Block(buf []byte) []byte {
 		return binary.LittleEndian.AppendUint64(nil, xxh3.HashSeed(buf, s.xxhSeed()))
 	case "xxh128":
 		return appendUint128(nil, xxh3.Hash128Seed(buf, s.xxhSeed()))
+	case "sha1", "sha3-256", "sha3-384", "sha3-512":
+		// OpenSSL's digests, which take the seed first
+		// (get_checksum2, xfer_sum_evp_md).
+		h := newHash(s.name)
+		if s.seed != 0 {
+			h.Write(s.seedBytes())
+		}
+		h.Write(buf)
+		return h.Sum(nil)
 	case "md5":
 		h := md5.New()
 		if s.seed != 0 && s.seedFirst {
@@ -214,6 +255,14 @@ func newHash(name string) hash.Hash {
 		return &xxh128Hash{xxh3.New()}
 	case "md5":
 		return md5.New()
+	case "sha1":
+		return sha1.New()
+	case "sha3-256":
+		return sha3.New256()
+	case "sha3-384":
+		return sha3.New384()
+	case "sha3-512":
+		return sha3.New512()
 	default:
 		return md4.New()
 	}

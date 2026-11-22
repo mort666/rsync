@@ -88,8 +88,7 @@ func (rt *Transfer) skipFile(f *File, st os.FileInfo) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		n := rt.strong().FileLen()
-		return bytes.Equal(f.Checksum[:n], checksum[:n]), nil
+		return bytes.Equal(f.Checksum, checksum), nil
 	}
 
 	// TODO: size only

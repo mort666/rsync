@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -71,9 +72,79 @@ func stockHasChoices(t *testing.T) {
 	}
 }
 
+// stockChecksums are the checksums of rsyncchecksum.Names that the stock
+// rsync takes in --checksum-choice: sha1 needs OpenSSL, the SHA-3 sums
+// rsync 4.0 and an OpenSSL with them.
+func stockChecksums(t *testing.T) []string {
+	t.Helper()
+	bin := rsynctest.TridgeOrGTFO(t, "compares with stock rsync")
+	probe := filepath.Join(t.TempDir(), "probe")
+	if err := os.WriteFile(probe, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, cc := range rsyncchecksum.Names {
+		if err := exec.Command(bin, "--cc="+cc, "--list-only", probe).Run(); err != nil {
+			t.Logf("stock rsync has no %s checksum (%v)", cc, err)
+			continue
+		}
+		names = append(names, cc)
+	}
+	return names
+}
+
+// sha1 and the SHA-3 sums are negotiated when both sides list them first
+// in RSYNC_CHECKSUM_LIST. The SHA-3 sums are offered only that way, or with
+// --checksum-choice; rsyncchecksum's tests check they are not by default.
+func TestChecksumList(t *testing.T) {
+	stockHasChoices(t)
+	if p, err := strconv.Atoi(os.Getenv("RSYNC_MATRIX_PROTOCOL")); err == nil && p < 30 {
+		t.Skip("nothing is negotiated below protocol 30")
+	}
+	for _, cc := range []string{"sha3-512", "sha3-384", "sha3-256", "sha1"} {
+		t.Run(cc, func(t *testing.T) {
+			if !slicesContains(stockChecksums(t), cc) {
+				t.Skipf("stock rsync has no %s", cc)
+			}
+			t.Setenv("RSYNC_CHECKSUM_LIST", cc+" md5")
+			for _, dir := range []string{"from gokrazy", "to gokrazy"} {
+				src, dest, data := deltaTree(t)
+				var out string
+				var err error
+				if dir == "from gokrazy" {
+					ts := rsynctest.New(t, rsynctest.InteropModule(src))
+					out, err = stock(t, "--debug=nstr", "-r", "-I", "--stats", "rsync://localhost:"+ts.Port+"/interop/", dest+"/")
+				} else {
+					ts := rsynctest.New(t, rsynctest.WritableInteropModule(dest))
+					out, err = stock(t, "--debug=nstr", "-r", "-I", "--stats", src+"/", "rsync://localhost:"+ts.Port+"/interop/")
+				}
+				if err != nil {
+					t.Fatalf("%s: %v", dir, err)
+				}
+				if !strings.Contains(out, "negotiated checksum: "+cc) {
+					t.Errorf("%s: stock rsync did not negotiate %s", dir, cc)
+				}
+				if got := matchedData(t, out); got < 190000 {
+					t.Errorf("%s: Matched data %d bytes, want nearly all of 200000: the block sums disagree", dir, got)
+				}
+				checkDelta(t, dest, data)
+			}
+		})
+	}
+}
+
+func slicesContains(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
 func TestChecksumChoiceFromGokrazy(t *testing.T) {
 	stockHasChoices(t)
-	for _, cc := range rsyncchecksum.Names {
+	for _, cc := range stockChecksums(t) {
 		t.Run(cc, func(t *testing.T) {
 			src, dest, data := deltaTree(t)
 			ts := rsynctest.New(t, rsynctest.InteropModule(src))
@@ -91,7 +162,7 @@ func TestChecksumChoiceFromGokrazy(t *testing.T) {
 
 func TestChecksumChoiceToGokrazy(t *testing.T) {
 	stockHasChoices(t)
-	for _, cc := range rsyncchecksum.Names {
+	for _, cc := range stockChecksums(t) {
 		t.Run(cc, func(t *testing.T) {
 			src, dest, data := deltaTree(t)
 			ts := rsynctest.New(t, rsynctest.WritableInteropModule(dest))
@@ -112,7 +183,7 @@ func TestChecksumChoiceToGokrazy(t *testing.T) {
 // how much matched.
 func TestChecksumChoiceGokrazyClient(t *testing.T) {
 	stockHasChoices(t)
-	for _, cc := range rsyncchecksum.Names {
+	for _, cc := range stockChecksums(t) {
 		t.Run(cc, func(t *testing.T) {
 			src, dest, data := deltaTree(t)
 			addr, _ := startStockDaemonConf(t, src, "")
@@ -136,7 +207,7 @@ func TestChecksumChoiceGokrazyClient(t *testing.T) {
 // content must be sent; one that is the same must not.
 func TestAlwaysChecksumEachAlgorithm(t *testing.T) {
 	stockHasChoices(t)
-	for _, cc := range rsyncchecksum.Names {
+	for _, cc := range stockChecksums(t) {
 		t.Run(cc, func(t *testing.T) {
 			src := filepath.Join(t.TempDir(), "src")
 			dest := t.TempDir()

@@ -42,7 +42,7 @@ type File struct {
 	Gid        int32
 	LinkTarget string
 	Rdev       int32
-	Checksum   [rsyncchecksum.Size]byte
+	Checksum   []byte
 
 	// State that later entries refer back to, carried from entry to entry
 	// as rsync's recv_file_entry keeps it in statics: the last device's
@@ -304,8 +304,9 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	// anything but a regular file.
 	if rt.Opts.AlwaysChecksum && (isReg || proto < 28) {
 		// As long as the file checksum is: 16 bytes for MD4 and MD5, 8 for
-		// xxh64 and xxh3.
-		if _, err := io.ReadFull(rt.Conn.Reader, f.Checksum[:rsyncchecksum.NewStrong(rt.Conn.Session, 0).FileLen()]); err != nil {
+		// xxh64 and xxh3, 20 for sha1, up to 64 for SHA-3.
+		f.Checksum = make([]byte, rsyncchecksum.NewStrong(rt.Conn.Session, 0).FileLen())
+		if _, err := io.ReadFull(rt.Conn.Reader, f.Checksum); err != nil {
 			return nil, err
 		}
 	}

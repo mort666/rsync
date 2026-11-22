@@ -10,9 +10,10 @@ import (
 )
 
 // rsync's own tables, in order (checksum.c valid_checksums_items and
-// valid_auth_checksums_items, rsync 3.5.2), aliases and all.
+// valid_auth_checksums_items, rsync master for 4.0.0, which adds SHA-3 to
+// 3.5.2's), aliases and all.
 var (
-	upstreamChecksums = []string{"xxh128", "xxh3", "xxh64", "xxhash", "md5", "md4", "sha1", "none"}
+	upstreamChecksums = []string{"xxh128", "xxh3", "xxh64", "xxhash", "sha3-512", "sha3-384", "sha3-256", "md5", "md4", "sha1", "none"}
 	upstreamAuth      = []string{"sha512", "sha256", "sha1", "md5", "md4"}
 )
 
@@ -23,6 +24,7 @@ func TestNamesKeepUpstreamOrder(t *testing.T) {
 		ours, upstream []string
 	}{
 		{Names, upstreamChecksums},
+		{DefaultNames, upstreamChecksums},
 		{AuthDigests, upstreamAuth},
 	} {
 		i := 0
@@ -48,10 +50,13 @@ func TestPickName(t *testing.T) {
 		// Our ranking decides, not the peer's order.
 		{"md4 md5", "md5", true},
 		{"sha1 none md4", "md4", true},
-		{"sha1 none", "", false},
+		{"sha1 none", "sha1", true},
+		{"none", "", false},
+		// Not offered unless asked for, so never picked from the defaults.
+		{"sha3-512 sha3-256", "", false},
 		{"", "", false},
 	} {
-		got, ok := rsyncwire.PickName(Names, tt.peer)
+		got, ok := rsyncwire.PickName(DefaultNames, tt.peer)
 		if got != tt.want || ok != tt.ok {
 			t.Errorf("PickName(%q) = %q, %v; want %q, %v", tt.peer, got, ok, tt.want, tt.ok)
 		}
@@ -64,14 +69,18 @@ func TestOurList(t *testing.T) {
 		server bool
 		want   string
 	}{
-		{"", false, "xxh128 xxh3 xxh64 md5 md4"},
+		{"", false, "xxh128 xxh3 xxh64 md5 md4 sha1"},
 		{"md5 xxh64", false, "md5 xxh64"},
-		{"sha1 md4", false, "md4"},
-		{"sha1", false, "xxh128 xxh3 xxh64 md5 md4"},
+		{"sha1 md4", false, "sha1 md4"},
+		{"blake3 md4", false, "md4"},
+		{"blake3", false, "xxh128 xxh3 xxh64 md5 md4 sha1"},
 		{"md5&xxh3", false, "md5"},
 		{"md5&xxh3", true, "xxh3"},
+		// The SHA-3 sums only when asked for.
+		{"sha3-256 md5", false, "sha3-256 md5"},
+		{"md5&sha3-512", true, "sha3-512"},
 	} {
-		got := rsyncwire.OurList(tt.env, tt.server, Names)
+		got := rsyncwire.OurList(tt.env, tt.server, Names, DefaultNames)
 		if s := join(got); s != tt.want {
 			t.Errorf("OurList(%q, server=%v) = %q, want %q", tt.env, tt.server, s, tt.want)
 		}
@@ -134,13 +143,15 @@ func TestNegotiateChoice(t *testing.T) {
 		{"xxh3,md5", "xxh3", "md5"},
 		{"auto", "", ""},
 		{"auto,xxh128", "", "xxh128"},
+		{"sha1", "sha1", "sha1"},
+		{"SHA3-256,sha3-512", "sha3-256", "sha3-512"},
 	} {
 		c := &rsyncwire.Conn{Session: rsyncwire.Session{Protocol: 30}}
 		if err := Negotiate(c, tt.choice, false); err != nil || c.Session.Checksum != tt.xfer || c.Session.FileChecksum != tt.file {
 			t.Errorf("Negotiate(%q) = %q, %q, %v; want %q, %q", tt.choice, c.Session.Checksum, c.Session.FileChecksum, err, tt.xfer, tt.file)
 		}
 	}
-	if err := Negotiate(&rsyncwire.Conn{}, "sha1", false); err == nil {
-		t.Errorf("Negotiate(sha1): no error")
+	if err := Negotiate(&rsyncwire.Conn{}, "blake3", false); err == nil {
+		t.Errorf("Negotiate(blake3): no error")
 	}
 }

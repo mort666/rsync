@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/gokrazy/rsync"
-	"github.com/gokrazy/rsync/internal/rsyncchecksum"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
 )
@@ -476,8 +475,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	// Before protocol 28, every entry carried a checksum, all zeros for
 	// anything but a regular file.
 	if opts.AlwaysChecksum() && (info.Mode().IsRegular() || proto < 28) {
-		var emptyChecksum [rsyncchecksum.Size]byte
-		checksum := emptyChecksum[:]
+		checksum := make([]byte, s.st.strong().FileLen())
 		if info.Mode().IsRegular() {
 			f, err := s.source.Open(path)
 			if err != nil {

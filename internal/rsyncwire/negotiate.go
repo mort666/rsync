@@ -24,10 +24,11 @@ func PickName(ours []string, peerList string) (name string, ok bool) {
 }
 
 // OurList is the list a side offers: env (rsync's RSYNC_CHECKSUM_LIST or
-// RSYNC_COMPRESS_LIST) narrowed to supported names in env's order, or all
-// of supported when env is empty or names none of them. A server uses what
+// RSYNC_COMPRESS_LIST) narrowed to supported names in env's order, or
+// defaults when env is empty or names none of them. defaults may leave out
+// names a side offers only when asked to. A server uses what
 // follows a '&' in env, as rsync does with "client&server".
-func OurList(env string, isServer bool, supported []string) []string {
+func OurList(env string, isServer bool, supported, defaults []string) []string {
 	if isServer {
 		if _, after, ok := strings.Cut(env, "&"); ok {
 			env = after
@@ -44,7 +45,7 @@ func OurList(env string, isServer bool, supported []string) []string {
 		}
 	}
 	if len(list) == 0 {
-		return supported
+		return defaults
 	}
 	return list
 }

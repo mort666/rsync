@@ -43,7 +43,9 @@ func (sh *SumHead) ReadFrom(c *rsyncwire.Conn) error {
 // ReadFromMax is io.c:read_sum_head: a sum head, checked as rsync 3.4
 // checks it. maxSumLen is the session's strong checksum length
 // (xfer_sum_len), which the per-block checksum length may not exceed: 8
-// for xxh64 and xxh3, 16 for the others.
+// for xxh64 and xxh3, 16 for the others. rsync's own limit is the sum's
+// full length, but its generator never sends more than 16 (SUM_LENGTH),
+// which is all Sum2 holds, so more is refused here too.
 func (sh *SumHead) ReadFromMax(c *rsyncwire.Conn, maxSumLen int) error {
 	// io.c:read_sum_head: MAX_BLOCK_SIZE from protocol 30,
 	// OLD_MAX_BLOCK_SIZE before.
@@ -85,7 +87,7 @@ func (sh *SumHead) ReadFromMax(c *rsyncwire.Conn, maxSumLen int) error {
 	if err != nil {
 		return err
 	}
-	if sh.ChecksumLength < 0 || int(sh.ChecksumLength) > maxSumLen {
+	if sh.ChecksumLength < 0 || int(sh.ChecksumLength) > min(maxSumLen, len(SumBuf{}.Sum2)) {
 		return fmt.Errorf("invalid checksum length %d", sh.ChecksumLength)
 	}
 
