@@ -143,4 +143,7 @@ jobs:
 
     - name: run tests (windows)
       if: matrix.os == 'windows-latest'
+      env:
+        # MSYS2's rsync makes real Windows symlinks only with this.
+        MSYS: ${{ matrix.rsync == 'msys2' && 'winsymlinks:native' || '' }}
       run: go test -v ./...

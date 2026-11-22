@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gokrazy/rsync"
@@ -26,6 +27,11 @@ func linkTargets(list []rsync.FileInfo) map[string]string {
 // text as the link holds it, also for a link to nothing. Without -l the
 // sender sends none.
 func TestFileListGivesLinkTargets(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows gives absolute targets with backslashes, and rsync for
+		// Windows prefixes the drive (/c/...).
+		t.Skip("symlink targets are not POSIX paths on Windows")
+	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
 		t.Fatal(err)

@@ -171,7 +171,7 @@ func New(t *testing.T, modules []rsyncd.Module, opts ...Option) *TestServer {
 			}
 		}()
 	} else {
-		go srv.Serve(context.Background(), ts.listener)
+		go srv.Serve(context.Background(), trackConns(t, ts.listener))
 	}
 
 	return ts
@@ -447,4 +447,73 @@ func RsyncVersion(t *testing.T) string {
 		t.Fatalf("no rsync installed")
 	}
 	return rsyncVersionOnce()
+}
+
+// trackConns wraps ln so that the test's cleanup waits for every
+// connection's handler to return (handlers close their connection when they
+// do). Otherwise a handler can still hold a module's folder open when the
+// test's temporary folders are removed, which Windows refuses.
+func trackConns(t *testing.T, ln net.Listener) net.Listener {
+	tl := &trackedListener{Listener: ln, conns: map[*trackedConn]bool{}}
+	t.Cleanup(func() {
+		ln.Close()
+		tl.mu.Lock()
+		for c := range tl.conns {
+			c.Conn.Close() // unblocks the handler, which then calls Close
+		}
+		tl.mu.Unlock()
+		done := make(chan struct{})
+		go func() { tl.wg.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Logf("rsynctest: connection handlers still running after 10s")
+		}
+	})
+	return tl
+}
+
+type trackedListener struct {
+	net.Listener
+	mu    sync.Mutex
+	conns map[*trackedConn]bool
+	wg    sync.WaitGroup
+}
+
+func (l *trackedListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	c := &trackedConn{Conn: conn, l: l}
+	l.mu.Lock()
+	l.conns[c] = true
+	l.wg.Add(1)
+	l.mu.Unlock()
+	return c, nil
+}
+
+type trackedConn struct {
+	net.Conn
+	l    *trackedListener
+	once sync.Once
+}
+
+func (c *trackedConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() {
+		c.l.mu.Lock()
+		delete(c.l.conns, c)
+		c.l.mu.Unlock()
+		c.l.wg.Done()
+	})
+	return err
+}
+
+// CloseWrite keeps the daemon's lingering close (rsyncd.Server.Serve).
+func (c *trackedConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
 }

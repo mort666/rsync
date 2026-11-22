@@ -111,7 +111,9 @@ func TestResultIOErrorsFromStockRsync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("rsync", client.ServerCommandOptions(src+"/")...)
+	// A relative path: rsync on Windows does not take "C:\\...".
+	t.Chdir(src)
+	cmd := exec.Command("rsync", client.ServerCommandOptions("./")...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdin, err := cmd.StdinPipe()

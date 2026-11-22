@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/gokrazy/rsync"
@@ -24,6 +25,9 @@ func sendTree(t *testing.T, bad string, dir bool) string {
 	t.Helper()
 	if os.Getuid() == 0 {
 		t.Skip("root reads everything")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce POSIX permission bits")
 	}
 	src := t.TempDir()
 	files := []string{"ok.txt", bad}
@@ -140,6 +144,9 @@ func TestSenderCountsWhatItLeavesOut(t *testing.T) {
 func TestReceiverCountsWhatItCannotDelete(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("root deletes everything")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce POSIX permission bits")
 	}
 	src, dest := t.TempDir(), t.TempDir()
 	if err := os.MkdirAll(filepath.Join(src, "ro"), 0o755); err != nil {

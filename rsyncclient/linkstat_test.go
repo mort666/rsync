@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -128,6 +129,9 @@ func TestDaemonSendsANamedLinkAsTheLink(t *testing.T) {
 // A requested path that is not there was only counted in io_error, which
 // the daemon also sets for a path it cannot read: a client could not tell
 // the two apart. rsync tells the client which, in a link_stat message.
+// notThereRe is the system's message for a path that is not there.
+var notThereRe = regexp.MustCompile(`(?i)no such file or directory|cannot find the (file|path) specified`)
+
 func TestDaemonSaysANamedPathIsNotThere(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
@@ -136,7 +140,7 @@ func TestDaemonSaysANamedPathIsNotThere(t *testing.T) {
 	for _, p := range []string{"nope.txt", "nodir/x.txt"} {
 		res, msgs := listOne(t, dir, []string{"-n", "-d", "-l"}, p)
 		if len(res.FileList) != 0 || res.IOErrors&1 == 0 || res.XferErrors == 0 ||
-			!strings.Contains(msgs, "no such file or directory") || !strings.Contains(msgs, p) {
+			!notThereRe.MatchString(msgs) || !strings.Contains(msgs, p) {
 			t.Errorf("%s: file list %q, io_error %d, %d errors, messages %q; want a link_stat message that it is not there",
 				p, names(res.FileList), res.IOErrors, res.XferErrors, msgs)
 		}
