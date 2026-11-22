@@ -6,6 +6,7 @@ package maincmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -37,7 +38,22 @@ type readWriteCloser struct {
 
 func (r *readWriteCloser) Read(p []byte) (n int, err error)  { return r.r.Read(p) }
 func (r *readWriteCloser) Write(p []byte) (n int, err error) { return r.w.Write(p) }
-func (r *readWriteCloser) Close() error                      { return r.c.Close() }
+
+// Close closes c, or else the writer and the reader where they are
+// io.Closers. rsyncwire.WrapCtx closes the connection when the context
+// ends, which a local-server connection (no c) used to panic on.
+func (r *readWriteCloser) Close() error {
+	if r.c != nil {
+		return r.c.Close()
+	}
+	var errs []error
+	for _, x := range []any{r.w, r.r} {
+		if c, ok := x.(io.Closer); ok {
+			errs = append(errs, c.Close())
+		}
+	}
+	return errors.Join(errs...)
+}
 
 func Main(ctx context.Context, osenv *rsyncos.Env, args []string, cfg *rsyncdconfig.Config) (*rsyncstats.TransferStats, error) {
 	osenv.Logf("Main(osenv=%v, args=%q)", osenv, args)
