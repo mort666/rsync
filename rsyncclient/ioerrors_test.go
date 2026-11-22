@@ -114,6 +114,7 @@ func TestResultIOErrorsFromStockRsync(t *testing.T) {
 	// A relative path: rsync on Windows does not take "C:\\...".
 	t.Chdir(src)
 	cmd := exec.Command("rsync", client.ServerCommandOptions("./")...)
+	cmd.Stderr = testlogger.New(t)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdin, err := cmd.StdinPipe()

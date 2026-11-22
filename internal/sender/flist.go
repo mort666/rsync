@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -245,6 +246,13 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		mode |= rsync.S_IFREG
 	} else if info.Mode().Type()&os.ModeSymlink != 0 {
 		mode |= rsync.S_IFLNK
+		if runtime.GOOS == "windows" {
+			// Go gives a symlink the file's permission bits on Windows
+			// (0666). A Unix symlink is always 0777, and a receiver that
+			// sees other bits tries to change a link's permissions, which
+			// rsync for Windows (MSYS2) cannot do.
+			mode = rsync.S_IFLNK | 0o777
+		}
 		// TODO: skip symlink if PreserveSymlinks is not set
 	}
 
@@ -499,8 +507,16 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 }
 
 // rsync/flist.c:send_file_list
-func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRuleList) (*fileList, error) {
+func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRuleList) (_ *fileList, err error) {
 	var fileList fileList
+	// The caller closes the list's sources (open module folders) once it
+	// has sent the files; when building or sending the list fails, close
+	// them here. Windows cannot remove a folder that is still open.
+	defer func() {
+		if err != nil {
+			fileList.Close()
+		}
+	}()
 	fec := &rsyncwire.Buffer{}
 
 	uidMap := make(map[int32]string)
