@@ -4,6 +4,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"sync"
 
 	"github.com/gokrazy/rsync/internal/log"
 	"github.com/gokrazy/rsync/internal/progress"
@@ -39,9 +40,14 @@ type TransferOpts struct {
 	KeepDirlinks bool
 	SafeLinks    bool
 	MungeLinks   bool
-	IgnoreTimes       bool
-	AlwaysChecksum    bool
-	WholeFile         bool
+
+	// BasisDirs are the alternate folders of --compare-dest, --copy-dest
+	// or --link-dest, which AltDest names (rsyncopts.CompareDest, ...).
+	BasisDirs      []string
+	AltDest        int
+	IgnoreTimes    bool
+	AlwaysChecksum bool
+	WholeFile      bool
 
 	// PreserveXattrs is how many -X were given (see
 	// rsyncopts.Options.PreserveXattrs).
@@ -108,6 +114,11 @@ type Transfer struct {
 	// client-supplied filter list. Consulted only when DeleteMode is on.
 	Excluded func(name string) bool
 
+	// OpenBasisDir, if non-nil, opens an alternate folder of --link-dest
+	// and the like, as the daemon does to keep them inside its module.
+	// Otherwise a relative one is taken from Dest, as rsync does.
+	OpenBasisDir func(dir string) (*os.Root, error)
+
 	// Implied, when set, is what a receiving client asked for: a name
 	// outside of it fails the file list (rsync 3.4, CVE-2022-29154).
 	Implied *ImpliedNames
@@ -119,17 +130,23 @@ type Transfer struct {
 	TellClient func(tag uint8, msg string)
 
 	// state
-	Conn          *rsyncwire.Conn
-	Seed          int32
-	IOErrors      int32
-	Users         map[int32]mapping
-	Groups        map[int32]mapping
-	defaultPerms  fs.FileMode
-	retouchDirs   []retouchDir
+	Conn         *rsyncwire.Conn
+	Seed         int32
+	IOErrors     int32
+	Users        map[int32]mapping
+	Groups       map[int32]mapping
+	defaultPerms fs.FileMode
+	retouchDirs  []retouchDir
 
 	// hlinkLater maps each later member of a hard-link group to the
 	// group's first (hlink.go). It is read-only once the transfer runs.
 	hlinkLater map[*File]*File
+
+	// basisRoots are the alternate folders, nil where one could not be
+	// opened (alt.go); altBasis records, for a file, the one the generator
+	// sent block sums of, which the receiver then reads.
+	basisRoots    []*os.Root
+	altBasis      sync.Map           // *File -> int
 	delStats      rsyncwire.DelStats // what --delete removed (see countDeleted)
 	touchedBlocks int64              // 4 KiB blocks written to files (protocol 33 MSG_BLOCK_STATS)
 	dec           rsynctoken.Decoder // see decoder

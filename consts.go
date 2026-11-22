@@ -58,10 +58,11 @@ const (
 // sent after ITEM_BASIS_TYPE_FOLLOWS. Values below FNAMECMP_FNAME index the
 // --compare-dest/--copy-dest/--link-dest directories.
 const (
-	FNAMECMP_FNAME       = 0x80
-	FNAMECMP_PARTIAL_DIR = 0x81
-	FNAMECMP_BACKUP      = 0x82
-	FNAMECMP_FUZZY       = 0x83
+	FNAMECMP_BASIS_DIR_LOW = 0x00 // plus the alternate folder's index
+	FNAMECMP_FNAME         = 0x80
+	FNAMECMP_PARTIAL_DIR   = 0x81
+	FNAMECMP_BACKUP        = 0x82
+	FNAMECMP_FUZZY         = 0x83
 )
 
 // as per /usr/include/bits/stat.h:

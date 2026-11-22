@@ -487,6 +487,8 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			KeepDirlinks:      opts.KeepDirlinks(),
 			SafeLinks:         opts.SafeLinks(),
 			MungeLinks:        opts.MungeLinks(),
+			BasisDirs:         opts.BasisDirs(),
+			AltDest:           opts.AltDestType(),
 			PreservePerms:     opts.PreservePerms(),
 			PreserveDevices:   opts.PreserveDevices(),
 			PreserveSpecials:  opts.PreserveSpecials(),
@@ -537,7 +539,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		}
 		defer rt.DestRoot.Close()
 		if osenv.Restrict() {
-			if err := restrict.MaybeFileSystem(nil, []string{rt.Dest}); err != nil {
+			if err := restrict.MaybeFileSystem(nil, append([]string{rt.Dest}, basisDirs(opts, rt.Dest)...)); err != nil {
 				return nil, nil, fmt.Errorf("landlock: %v", err)
 			}
 		}
@@ -607,4 +609,21 @@ func linkReadDirs(opts *rsyncopts.Options, sources []string) []string {
 		return []string{"/"}
 	}
 	return sources
+}
+
+// basisDirs are the alternate folders of --link-dest and the like, a
+// relative one taken from dest, for the Landlock rules: linking from one
+// needs the refer right there as at the destination, which comes with
+// read-write access.
+func basisDirs(opts *rsyncopts.Options, dest string) []string {
+	var dirs []string
+	for _, dir := range opts.BasisDirs() {
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(dest, dir)
+		}
+		if _, err := os.Stat(dir); err == nil { // Landlock refuses missing paths
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
 }

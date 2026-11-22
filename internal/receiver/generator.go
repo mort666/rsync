@@ -266,6 +266,9 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 			}
 			// fallthrough to create or replace the symlink
 		}
+		if err != nil && len(rt.basisRoots) > 0 && rt.tryDestsNon(f) {
+			return nil
+		}
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			rt.Logger.Printf("symlink %s -> %s", f.Name, f.LinkTarget)
 		}
@@ -286,6 +289,9 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		mode == rsync.S_IFBLK ||
 		mode == rsync.S_IFSOCK ||
 		mode == rsync.S_IFIFO) {
+		if err != nil && len(rt.basisRoots) > 0 && !rt.Opts.FakeSuper && rt.tryDestsNon(f) {
+			return nil
+		}
 		if (mode == rsync.S_IFCHR || mode == rsync.S_IFBLK) && rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			major, minor := splitRdev(f.Rdev)
 			rt.Logger.Printf("mknod(%s, 0%o, [%d,%d])", f.Name, f.Mode, major, minor)
@@ -334,6 +340,31 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 			return nil
 		}
 		// no partial file? fall through.
+	}
+
+	if err == nil && !st.Mode().IsRegular() && len(rt.basisRoots) > 0 {
+		// Make room first, so that the alternate folders are asked as for
+		// a file that is not there (generator.c:recv_generator).
+		if err := rt.DestRoot.Remove(f.Name); err != nil {
+			return fmt.Errorf("unlinking to make room for regular file: %v", err)
+		}
+		err = fs.ErrNotExist
+	}
+	if len(rt.basisRoots) > 0 && (err != nil || rt.Opts.AltDest != rsyncopts.CopyDest) {
+		var destSt fs.FileInfo
+		if err == nil {
+			destSt = st
+		}
+		done, basis, aerr := rt.tryDestsReg(f, destSt, perm)
+		if aerr != nil {
+			return aerr
+		}
+		if done {
+			return nil
+		}
+		if basis >= 0 {
+			return rt.requestFromBasis(idx, f, basis)
+		}
 	}
 
 	if os.IsNotExist(err) {
@@ -530,4 +561,27 @@ func (rt *Transfer) info(msg string) {
 		return
 	}
 	rt.Logger.Printf("%s", strings.TrimSuffix(msg, "\n"))
+}
+
+// requestFromBasis asks for f with the block sums of its copy in the
+// alternate folder basis, which the receiver then reads too
+// (FNAMECMP_BASIS_DIR_LOW + basis).
+func (rt *Transfer) requestFromBasis(idx int, f *File, basis int) error {
+	in, err := rt.basisRoots[basis].Open(f.Name)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	st, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if err := rt.requestFile(idx, rt.changedFlags(f, st), byte(rsync.FNAMECMP_BASIS_DIR_LOW+basis)); err != nil {
+		return err
+	}
+	if rt.Opts.DryRun {
+		return nil
+	}
+	rt.altBasis.Store(f, basis)
+	return rt.generateAndSendSums(in, st.Size())
 }

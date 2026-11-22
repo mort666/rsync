@@ -250,6 +250,13 @@ func (o *Options) ServerOptions() []string {
 	// if (ignore_errors)
 	// 	args[ac++] = "--ignore-errors";
 
+	// Only a receiving server needs the alternate folders
+	// (options.c:server_options).
+	if o.Sender() {
+		for _, dir := range o.basis_dirs {
+			sargv = append(sargv, AltDestOption(o.alt_dest_type), dir)
+		}
+	}
 	if o.CopyUnsafeLinks() {
 		sargv = append(sargv, "--copy-unsafe-links")
 	}

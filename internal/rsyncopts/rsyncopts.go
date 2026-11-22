@@ -258,6 +258,8 @@ type Options struct {
 	modify_window          int
 	am_root                int      // 0 = normal, 1 = root, 2 = --super, -1 = --fake-super
 	remote_options         []string // -M: passed to the server as they are
+	basis_dirs             []string // --compare-dest, --copy-dest, --link-dest
+	alt_dest_type          int      // which of them (CompareDest, ...)
 	preserve_uid           int
 	preserve_gid           int
 	preserve_devices       int
@@ -1105,9 +1107,9 @@ func (o *Options) gokrazyTable() []poptOption {
 		{"checksum-choice", "", POPT_ARG_STRING, &o.checksum_choice, 0},
 		{"cc", "", POPT_ARG_STRING, &o.checksum_choice, 0},
 		{"block-size", "B", POPT_ARG_STRING, nil, OPT_BLOCK_SIZE},
-		//{"compare-dest", "", POPT_ARG_STRING, nil, OPT_COMPARE_DEST},
-		//{"copy-dest", "", POPT_ARG_STRING, nil, OPT_COPY_DEST},
-		//{"link-dest", "", POPT_ARG_STRING, nil, OPT_LINK_DEST},
+		{"compare-dest", "", POPT_ARG_STRING, nil, OPT_COMPARE_DEST},
+		{"copy-dest", "", POPT_ARG_STRING, nil, OPT_COPY_DEST},
+		{"link-dest", "", POPT_ARG_STRING, nil, OPT_LINK_DEST},
 		//{"fuzzy", "y", POPT_ARG_NONE, nil, 'y'},
 		//{"no-fuzzy", "", POPT_ARG_VAL, &o.fuzzy_basis, 0},
 		//{"no-y", "", POPT_ARG_VAL, &o.fuzzy_basis, 0},
@@ -1692,7 +1694,16 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 		case OPT_LINK_DEST,
 			OPT_COPY_DEST,
 			OPT_COMPARE_DEST:
-			return errNotYetImplemented
+			// rsync/options.c: one kind per run, up to MAX_BASIS_DIRS.
+			want := map[int32]int{OPT_COMPARE_DEST: CompareDest, OPT_COPY_DEST: CopyDest, OPT_LINK_DEST: LinkDest}[opt]
+			if opts.alt_dest_type != 0 && opts.alt_dest_type != want {
+				return fmt.Errorf("ERROR: the %s option conflicts with the %s option", AltDestOption(want), AltDestOption(opts.alt_dest_type))
+			}
+			opts.alt_dest_type = want
+			if len(opts.basis_dirs) >= MaxBasisDirs {
+				return fmt.Errorf("ERROR: at most %d %s args may be specified", MaxBasisDirs, AltDestOption(want))
+			}
+			opts.basis_dirs = append(opts.basis_dirs, pc.poptGetOptArg())
 
 		case OPT_CHMOD: // (needs parse_chmod):
 			return errNotYetImplemented
@@ -1850,3 +1861,33 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 // SymlinkPrefix is what --munge-links puts before a received symlink's
 // target, so that it leads nowhere (rsync.h SYMLINK_PREFIX).
 const SymlinkPrefix = "/rsyncd-munged/"
+
+// Alternate destination folders (rsync.h): what --compare-dest,
+// --copy-dest and --link-dest do with a file that matches in one.
+const (
+	CompareDest = 1 + iota
+	CopyDest
+	LinkDest
+
+	// MaxBasisDirs is how many alternate folders a run may name.
+	MaxBasisDirs = 20
+)
+
+// AltDestOption is the option for an alternate folder kind
+// (options.c:alt_dest_opt).
+func AltDestOption(kind int) string {
+	switch kind {
+	case CompareDest:
+		return "--compare-dest"
+	case CopyDest:
+		return "--copy-dest"
+	case LinkDest:
+		return "--link-dest"
+	}
+	return ""
+}
+
+// BasisDirs are the alternate folders, in the order given; AltDestType
+// says which kind they are.
+func (o *Options) BasisDirs() []string { return o.basis_dirs }
+func (o *Options) AltDestType() int    { return o.alt_dest_type }

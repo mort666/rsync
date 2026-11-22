@@ -618,6 +618,8 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			KeepDirlinks:      opts.KeepDirlinks(),
 			SafeLinks:         opts.SafeLinks(),
 			MungeLinks:        opts.MungeLinks(),
+			BasisDirs:         opts.BasisDirs(),
+			AltDest:           opts.AltDestType(),
 			PreservePerms:     opts.PreservePerms(),
 			PreserveDevices:   opts.PreserveDevices(),
 			PreserveSpecials:  opts.PreserveSpecials(),
@@ -663,6 +665,21 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 	defer rt.DestRoot.Close()
 
 	if !implicitModule {
+		// Alternate folders (--link-dest and the like) stay inside the
+		// module, as in a chrooted rsync daemon: an absolute one is taken
+		// from the module's top, a relative one from the destination.
+		moduleRoot, destRel := rt.DestRoot, "."
+		if len(paths) == 1 {
+			destRel = filepath.Clean(strings.Trim(paths[0], "/"))
+		}
+		rt.OpenBasisDir = func(dir string) (*os.Root, error) {
+			if filepath.IsAbs(dir) {
+				dir = strings.TrimLeft(dir, "/")
+			} else {
+				dir = filepath.Join(destRel, dir)
+			}
+			return moduleRoot.OpenRoot(filepath.Clean(dir))
+		}
 		if len(paths) > 1 {
 			return fmt.Errorf("module is available, and at most one destination path is allowed, got %q", paths)
 		}

@@ -130,6 +130,9 @@ func Main(ctx context.Context, osenv *rsyncos.Env, args []string, cfg *rsyncdcon
 				}
 			}
 			rwDirs = append(rwDirs, paths...)
+			if len(paths) > 0 {
+				rwDirs = append(rwDirs, basisDirs(opts, paths[0])...)
+			}
 		}
 		if osenv.Restrict() {
 			if err := restrict.MaybeFileSystem(roDirs, rwDirs); err != nil {

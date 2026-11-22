@@ -152,6 +152,10 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 	if rt.Opts.PreserveHardlinks {
 		rt.hlinkLater = matchHardLinks(fileList)
 	}
+	if len(rt.Opts.BasisDirs) > 0 {
+		rt.openBasisDirs()
+		defer rt.closeBasisDirs()
+	}
 
 	var eg errgroup.Group
 	// Close the connection as soon as either goroutine fails, so the other one
