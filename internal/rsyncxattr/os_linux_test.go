@@ -112,6 +112,10 @@ func TestReadSetAt(t *testing.T) {
 	for _, name := range []string{"link", "fifo"} {
 		want := map[string][]byte{"trusted.a": []byte("a"), "trusted.big": bytes.Repeat([]byte("b"), 100)}
 		if err := SetAt(d, name, want, nil, all); err != nil {
+			if errors.Is(err, unix.EPERM) {
+				// Root in a container without CAP_SYS_ADMIN.
+				t.Skipf("%s: %v (trusted names need CAP_SYS_ADMIN)", name, err)
+			}
 			t.Fatalf("%s: %v", name, err)
 		}
 		got, err := ReadAt(d, name, func(n string) bool { return strings.HasPrefix(n, "trusted.") })

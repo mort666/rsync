@@ -139,6 +139,12 @@ jobs:
         echo "::group::rsync from Fedora"
         docker run -v $PWD:/usr/src/rsync/ -w /usr/src/rsync rsync-fedora go test ./...
         echo "::endgroup::"
+        # As root on the runner itself, with every capability: trusted
+        # xattrs, also on symlinks and FIFOs, which a container's root
+        # cannot set.
+        echo "::group::xattrs as root"
+        sudo env "PATH=$PATH" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" go test -v -run 'Xattr|ReadSet' ./internal/rsyncxattr ./integration/flist
+        echo "::endgroup::"
 
     - name: run tests (macos)
       if: matrix.os == 'macos-latest'
