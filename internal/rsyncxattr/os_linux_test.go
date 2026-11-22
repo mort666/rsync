@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -142,4 +143,58 @@ func mustOpen(t *testing.T, path string) *os.File {
 	}
 	t.Cleanup(func() { f.Close() })
 	return f
+}
+
+// WriteStat stores and removes the %stat record, ReadStat reads it back,
+// and FakeInfo applies it.
+func TestStatRecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := ReadStat(d, "f", info); ok || err != nil {
+		t.Fatalf("ReadStat before any record = %v, %v", ok, err)
+	}
+	s := Stat{Mode: 0o20640, Major: 1, Minor: 3, Uid: 0, Gid: 6}
+	if err := WriteStat(d, "f", &s); err != nil {
+		if errors.Is(err, unix.ENOTSUP) {
+			t.Skip("no user xattrs here")
+		}
+		t.Fatal(err)
+	}
+	v := make([]byte, 64)
+	n, err := unix.Getxattr(path, StatName, v)
+	if err != nil || string(v[:n]) != "20640 1,3 0:6" {
+		t.Errorf("stored %q, %v", v[:n], err)
+	}
+	got, ok, err := ReadStat(d, "f", info)
+	if err != nil || !ok || got != s {
+		t.Fatalf("ReadStat = %+v, %v, %v", got, ok, err)
+	}
+	fi := FakeInfo(info, got)
+	if sys := fi.Sys().(*syscall.Stat_t); sys.Uid != 0 || sys.Gid != 6 || unix.Major(sys.Rdev) != 1 || unix.Minor(sys.Rdev) != 3 {
+		t.Errorf("FakeInfo stat uid %d gid %d rdev %d,%d", sys.Uid, sys.Gid, unix.Major(sys.Rdev), unix.Minor(sys.Rdev))
+	}
+	if fi.Mode().Type() != os.ModeDevice|os.ModeCharDevice || fi.Mode().Perm() != 0o640 || fi.Size() != 0 {
+		t.Errorf("FakeInfo mode %v size %d", fi.Mode(), fi.Size())
+	}
+	if err := WriteStat(d, "f", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := ReadStat(d, "f", info); ok {
+		t.Errorf("record still there after removal")
+	}
+	if err := WriteStat(d, "f", nil); err != nil {
+		t.Errorf("removing no record: %v", err)
+	}
 }

@@ -41,6 +41,11 @@ type Module struct {
 	Writable    bool     `toml:"writable"`     // Must be false if FS is set
 	AuthUsers   []string `toml:"auth_users"`   // Usernames allowed to connect; empty means no auth
 	SecretsFile string   `toml:"secrets_file"` // Path to file with user:password lines
+	// FakeSuper keeps owners, devices, special files, symlinks and
+	// permission bits the daemon cannot set itself in the user.rsync.%stat
+	// xattr, as rsyncd.conf's "fake super" does. Without it, a client's
+	// --fake-super is taken as --super. Linux only.
+	FakeSuper bool `toml:"fake_super"`
 }
 
 // Option specifies the server options.
@@ -328,6 +333,9 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 		// so the client hears why.
 		err = rsynctoken.CheckChoice(pc.Options.CompressChoice())
 	}
+	if err == nil {
+		err = pc.Options.SetFakeSuper(module.FakeSuper)
+	}
 	if err != nil {
 		err = fmt.Errorf("parsing server args: %v", err)
 
@@ -609,6 +617,8 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			Inplace:        opts.Inplace(),
 			BlockSize:      opts.BlockSize(),
 			PreserveXattrs: opts.PreserveXattrs(),
+			FakeSuper:      opts.FakeSuper(),
+			Super:          opts.Super(),
 			KeepPartial:    opts.KeepPartial(),
 			PartialDir:     opts.PartialDir(),
 

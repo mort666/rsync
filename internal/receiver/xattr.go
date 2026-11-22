@@ -21,12 +21,16 @@ import (
 func (rt *Transfer) xattrs() bool { return rt.Opts.PreserveXattrs > 0 }
 
 func (rt *Transfer) xattrFilter() rsyncxattr.Filter {
-	return rsyncxattr.Filter{Level: rt.Opts.PreserveXattrs, Root: os.Geteuid() == 0}
+	return rsyncxattr.Filter{
+		Level: rt.Opts.PreserveXattrs,
+		Root:  (os.Geteuid() == 0 || rt.Opts.Super) && !rt.Opts.FakeSuper,
+		Fake:  rt.Opts.FakeSuper,
+	}
 }
 
 // receiveXattrs reads a file-list entry's xattr list (receive_xattr).
 func (rt *Transfer) receiveXattrs(f *File) error {
-	ndx, err := rt.xattrCache.Receive(rt.Conn.Reader, rt.xattrFilter().KeepReceived)
+	ndx, err := rt.xattrCache.Receive(rt.Conn.Reader, rt.xattrFilter().Received)
 	if err != nil {
 		return fmt.Errorf("%s: %v", f.Name, err)
 	}
@@ -54,7 +58,10 @@ func (rt *Transfer) xattrKind(f *File) int {
 	case rsync.S_IFREG, rsync.S_IFDIR:
 		return xattrByFD
 	}
-	if rt.xattrFilter().Root && rsyncxattr.ProcFDAvailable() {
+	// Under --fake-super they are regular files with user xattrs, but
+	// reached by name all the same: the destination may still hold the
+	// real thing, which an open would follow or block on.
+	if filter := rt.xattrFilter(); (filter.Root || filter.Fake) && rsyncxattr.ProcFDAvailable() {
 		return xattrAt
 	}
 	return xattrNone

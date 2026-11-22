@@ -13,7 +13,11 @@ import (
 func (st *Transfer) xattrs() bool { return st.Opts.PreserveXattrs() > 0 }
 
 func (st *Transfer) xattrFilter() rsyncxattr.Filter {
-	return rsyncxattr.Filter{Level: st.Opts.PreserveXattrs(), Root: os.Geteuid() == 0}
+	return rsyncxattr.Filter{
+		Level: st.Opts.PreserveXattrs(),
+		Root:  (os.Geteuid() == 0 || st.Opts.Super()) && !st.Opts.FakeSuper(),
+		Fake:  st.Opts.FakeSuper(),
+	}
 }
 
 // xattrFile reaches one source file's xattrs: through a descriptor for
@@ -87,6 +91,15 @@ func (st *Transfer) readXattrs(source FileSource, path string, regularOrDir bool
 	if err != nil {
 		return nil, err
 	}
+	if filter.Fake {
+		// What --fake-super kept under user.rsync. goes back to its own
+		// namespace (send_xattr).
+		sent := make(map[string][]byte, len(values))
+		for name, v := range values {
+			sent[rsyncxattr.SendName(name)] = v
+		}
+		values = sent
+	}
 	return rsyncxattr.FromValues(values), nil
 }
 
@@ -127,6 +140,9 @@ func (st *Transfer) writeNdxAndAttrs(ndx int32, fl file, attrs rsyncwire.ItemAtt
 			return nil, fmt.Errorf("no xattrs in this source")
 		}
 		defer x.Close()
+		if st.xattrFilter().Fake {
+			name = rsyncxattr.LocalName(name)
+		}
 		return x.get(name)
 	})
 	if err != nil {

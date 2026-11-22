@@ -5,9 +5,11 @@ package rsyncxattr
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"os"
 	"strconv"
 	"sync"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -165,4 +167,51 @@ func (o ops) setAll(values, current map[string][]byte, keep func(name string) bo
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// FakeInfo is info with s applied, as --fake-super stats a file (x_lstat):
+// the mode, owner and device number from s, the rest from the file.
+func FakeInfo(info fs.FileInfo, s Stat) fs.FileInfo {
+	fi := fakeInfo{FileInfo: info, mode: s.GoMode(), sys: info.Sys()}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		c := *st
+		c.Mode = s.Mode
+		c.Uid, c.Gid = s.Uid, s.Gid
+		c.Rdev = unix.Mkdev(s.Major, s.Minor)
+		fi.sys = &c
+	}
+	return fi
+}
+
+// ReadStat reads name's %stat record in folder dir, without following a
+// symlink. ok is false when it has none: rsync only looks on regular files
+// and folders, as only those hold one (get_stat_xattr).
+func ReadStat(dir *os.File, name string, info fs.FileInfo) (s Stat, ok bool, err error) {
+	if !info.Mode().IsRegular() && !info.IsDir() {
+		return Stat{}, false, nil
+	}
+	v, err := GetAt(dir, name, StatName)
+	if errors.Is(err, unix.ENODATA) || errors.Is(err, unix.ENOTSUP) {
+		return Stat{}, false, nil
+	}
+	if err != nil {
+		return Stat{}, false, err
+	}
+	s, err = ParseStat(v)
+	return s, err == nil, err
+}
+
+// WriteStat stores or removes name's %stat record in folder dir.
+func WriteStat(dir *os.File, name string, s *Stat) error {
+	o := atOps(dir, name)
+	if s == nil {
+		if err := o.remove(StatName); err != nil && !errors.Is(err, unix.ENODATA) {
+			return &os.PathError{Op: "removexattr " + StatName, Path: o.what, Err: err}
+		}
+		return nil
+	}
+	if err := o.set(StatName, []byte(s.String())); err != nil {
+		return &os.PathError{Op: "setxattr " + StatName, Path: o.what, Err: err}
+	}
+	return nil
 }

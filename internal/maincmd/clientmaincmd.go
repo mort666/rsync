@@ -500,6 +500,8 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			Inplace:        opts.Inplace(),
 			BlockSize:      opts.BlockSize(),
 			PreserveXattrs: opts.PreserveXattrs(),
+			FakeSuper:      opts.FakeSuper(),
+			Super:          opts.Super(),
 			KeepPartial:    opts.KeepPartial(),
 			PartialDir:     opts.PartialDir(),
 

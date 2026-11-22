@@ -255,7 +255,8 @@ type Options struct {
 	omit_dir_times         int
 	omit_link_times        int
 	modify_window          int
-	am_root                int // 0 = normal, 1 = root, 2 = --super, -1 = --fake-super
+	am_root                int      // 0 = normal, 1 = root, 2 = --super, -1 = --fake-super
+	remote_options         []string // -M: passed to the server as they are
 	preserve_uid           int
 	preserve_gid           int
 	preserve_devices       int
@@ -837,6 +838,29 @@ func (o *Options) PreserveXattrs() int { return o.preserve_xattrs }
 // BlockSize is --block-size, or 0 for rsync's choice per file.
 func (o *Options) BlockSize() int32 { return o.block_size }
 
+// FakeSuper reports --fake-super: keep what only root can set in xattrs.
+func (o *Options) FakeSuper() bool { return o.am_root < 0 }
+
+// Super reports --super: act as root even if not (am_root 2).
+func (o *Options) Super() bool { return o.am_root > 1 }
+
+// SetFakeSuper turns --fake-super on or off, as a daemon module's "fake
+// super" setting does. Off, a --fake-super the client asked for is taken
+// as --super (clientserver.c).
+func (o *Options) SetFakeSuper(on bool) error {
+	switch {
+	case on && o.preserve_xattrs > 1:
+		return fmt.Errorf("--fake-super conflicts with -XX")
+	case on && !rsyncxattr.Supported:
+		return fmt.Errorf("fake super needs extended attributes, which this platform lacks")
+	case on:
+		o.am_root = -1
+	case o.am_root < 0:
+		o.am_root = 2
+	}
+	return nil
+}
+
 // CompressThreads is --compress-threads (never below 0). zstd here
 // compresses on one thread whatever it says.
 func (o *Options) CompressThreads() int { return max(o.do_compression_threads, 0) }
@@ -969,9 +993,9 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"no-omit-link-times", "", POPT_ARG_VAL, &o.omit_link_times, 0},
 		//{"no-J", "", POPT_ARG_VAL, &o.omit_link_times, 0},
 		//{"modify-window", "@", POPT_ARG_INT, &o.modify_window, OPT_MODIFY_WINDOW},
-		//{"super", "", POPT_ARG_VAL, &o.am_root, 2},
-		//{"no-super", "", POPT_ARG_VAL, &o.am_root, 0},
-		//{"fake-super", "", POPT_ARG_VAL, &o.am_root, -1},
+		{"super", "", POPT_ARG_VAL, &o.am_root, 2},
+		{"no-super", "", POPT_ARG_VAL, &o.am_root, 0},
+		{"fake-super", "", POPT_ARG_VAL, &o.am_root, -1},
 		{"owner", "o", POPT_ARG_VAL, &o.preserve_uid, 1},
 		{"no-owner", "", POPT_ARG_VAL, &o.preserve_uid, 0},
 		{"no-o", "", POPT_ARG_VAL, &o.preserve_uid, 0},
@@ -1158,7 +1182,7 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"blocking-io", "", POPT_ARG_VAL, &o.blocking_io, 1},
 		//{"no-blocking-io", "", POPT_ARG_VAL, &o.blocking_io, 0},
 		//{"outbuf", "", POPT_ARG_STRING, &o.outbuf_mode, 0},
-		//{"remote-option", "M", POPT_ARG_STRING, nil, 'M'},
+		{"remote-option", "M", POPT_ARG_STRING, nil, 'M'},
 		{"protocol", "", POPT_ARG_INT, &o.protocol_version, 0},
 		//{"checksum-seed", "", POPT_ARG_INT, &o.checksum_seed, 0},
 		{"server", "", POPT_ARG_NONE, nil, OPT_SERVER},
@@ -1608,7 +1632,11 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 			return errNotYetImplemented
 
 		case 'M': // --remote-option
-			return errNotYetImplemented
+			arg := pc.poptGetOptArg()
+			if !strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("remote option must start with a dash: %s", arg)
+			}
+			opts.remote_options = append(opts.remote_options, arg)
 
 		case OPT_WRITE_BATCH,
 			OPT_ONLY_WRITE_BATCH,
@@ -1766,6 +1794,15 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 	// with zeros.
 	if opts.append_mode != 0 {
 		opts.inplace = 1
+	}
+
+	// rsync/options.c: --fake-super keeps its records in xattrs, which -XX
+	// would copy as well.
+	if opts.am_root < 0 && opts.preserve_xattrs > 1 {
+		return fmt.Errorf("--fake-super conflicts with -XX")
+	}
+	if opts.am_root < 0 && !rsyncxattr.Supported {
+		return fmt.Errorf("--fake-super requires an rsync with extended attributes enabled")
 	}
 
 	if opts.do_progress != 0 && opts.am_server == 0 {

@@ -126,7 +126,8 @@ func (rt *Transfer) setPerms(f *File, perm fs.FileMode) error {
 		return err
 	}
 
-	isLink := f.Mode&rsync.S_IFMT == rsync.S_IFLNK
+	// Under --fake-super a symlink is a regular file, which takes times.
+	isLink := f.Mode&rsync.S_IFMT == rsync.S_IFLNK && !rt.Opts.FakeSuper
 	isDir := f.Mode&rsync.S_IFMT == rsync.S_IFDIR
 	if rt.Opts.PreserveTimes &&
 		!isLink &&
@@ -135,6 +136,10 @@ func (rt *Transfer) setPerms(f *File, perm fs.FileMode) error {
 		if err := rt.DestRoot.Chtimes(f.Name, f.ModTime, f.ModTime); err != nil {
 			return err
 		}
+	}
+
+	if rt.Opts.FakeSuper {
+		return rt.setFakeStat(f, perm, st)
 	}
 
 	_, err = rt.setUid(f, st)
@@ -168,7 +173,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 	}
 
 	local := filepath.Join(rt.Dest, f.Name)
-	st, err := rt.DestRoot.Lstat(f.Name)
+	st, err := rt.lstat(f.Name)
 
 	mode := f.Mode & rsync.S_IFMT
 	if mode == rsync.S_IFDIR {
@@ -225,7 +230,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		// TODO: safe_symlinks option
 		if err == nil {
 			// local file exists, verify target matches
-			if target, err := rt.DestRoot.Readlink(f.Name); err == nil {
+			if target, err := rt.readlink(f.Name); err == nil {
 				if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 					rt.Logger.Printf("existing target: %q", target)
 				}
@@ -242,7 +247,11 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			rt.Logger.Printf("symlink %s -> %s", f.Name, f.LinkTarget)
 		}
-		if err := symlink(rt.DestRoot, f.LinkTarget, f.Name); err != nil {
+		create := symlink
+		if rt.Opts.FakeSuper {
+			create = func(_ *os.Root, target, name string) error { return rt.placeholder(name, target) }
+		}
+		if err := create(rt.DestRoot, f.LinkTarget, f.Name); err != nil {
 			return err
 		}
 		if err := rt.setPerms(f, perm); err != nil {
@@ -258,6 +267,12 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		if (mode == rsync.S_IFCHR || mode == rsync.S_IFBLK) && rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			major, minor := splitRdev(f.Rdev)
 			rt.Logger.Printf("mknod(%s, 0%o, [%d,%d])", f.Name, f.Mode, major, minor)
+		}
+		if rt.Opts.FakeSuper {
+			if err := rt.fakeDevice(f, st); err != nil {
+				return err
+			}
+			return rt.setPerms(f, perm)
 		}
 		if err := rt.createDevice(f, st, perm); err != nil {
 			return err

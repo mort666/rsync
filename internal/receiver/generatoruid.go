@@ -10,7 +10,10 @@ import (
 	"syscall"
 )
 
-var amRoot = os.Getuid() == 0
+var isRoot = os.Getuid() == 0
+
+// amRoot reports whether this side acts as root: it is, or --super.
+func (rt *Transfer) amRoot() bool { return isRoot || rt.Opts.Super }
 
 var inGroup = func() map[uint32]bool {
 	m := make(map[uint32]bool)
@@ -36,11 +39,11 @@ func (rt *Transfer) setUid(f *File, st fs.FileInfo) (fs.FileInfo, error) {
 	stt := st.Sys().(*syscall.Stat_t)
 
 	changeUid := rt.Opts.PreserveUid &&
-		amRoot &&
+		rt.amRoot() &&
 		stt.Uid != uint32(f.Uid)
 
 	changeGid := rt.Opts.PreserveGid &&
-		(amRoot || inGroup[uint32(f.Gid)]) &&
+		(rt.amRoot() || inGroup[uint32(f.Gid)]) &&
 		stt.Gid != uint32(f.Gid)
 
 	if !changeUid && !changeGid {

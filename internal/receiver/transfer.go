@@ -39,6 +39,13 @@ type TransferOpts struct {
 	// rsyncopts.Options.PreserveXattrs).
 	PreserveXattrs int
 
+	// FakeSuper is --fake-super: what only root can set (owners, devices,
+	// specials, symlinks, setuid bits) goes into the user.rsync.%stat
+	// xattr of a regular file or folder instead. Super is --super: act as
+	// root.
+	FakeSuper bool
+	Super     bool
+
 	// BlockSize is --block-size: the delta block length for every file,
 	// or 0 for rsync's choice per file (sum_sizes_sqroot).
 	BlockSize int32

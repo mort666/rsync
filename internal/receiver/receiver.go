@@ -88,7 +88,7 @@ func (rt *Transfer) recvFile1(f *File) error {
 		return nil
 	}
 
-	st, err := rt.DestRoot.Lstat(f.Name)
+	st, err := rt.lstat(f.Name)
 	if err != nil || !st.Mode().IsRegular() {
 		st = nil
 	}

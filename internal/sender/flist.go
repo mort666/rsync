@@ -173,6 +173,10 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	if err == nil {
 		info, err = d.Info()
 	}
+	fakeLink := false // a symlink kept as a regular file by --fake-super
+	if err == nil && opts.FakeSuper() {
+		info, fakeLink, err = s.st.fakeStat(s.source, path, info)
+	}
 	if err != nil {
 		// set the I/O error flag, but keep walking
 		s.ioError(err)
@@ -241,6 +245,16 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	xflags := uint16(flags)
 
 	mode := int32(info.Mode() & os.ModePerm)
+	// The bits Go keeps apart: rsync sends them in the mode, and a
+	// receiver as root, or with --fake-super, keeps them.
+	for _, b := range []struct {
+		goBit   fs.FileMode
+		unixBit int32
+	}{{fs.ModeSetuid, 0o4000}, {fs.ModeSetgid, 0o2000}, {fs.ModeSticky, 0o1000}} {
+		if info.Mode()&b.goBit != 0 {
+			mode |= b.unixBit
+		}
+	}
 	isDev := false
 	isSpecial := false
 	if info.Mode().IsDir() {
@@ -462,7 +476,11 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		// 11.  if a symbolic link and -l, the link target's length (integer)
 		// 12.  if a symbolic link and -l, the link target (byte array)
 
-		target, err := s.source.Readlink(path)
+		readlink := s.source.Readlink
+		if fakeLink {
+			readlink = func(p string) (string, error) { return readPlaceholder(s.source, p) }
+		}
+		target, err := readlink(path)
 		if err != nil {
 			return err // TODO
 		}

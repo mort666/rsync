@@ -4,6 +4,7 @@ package rsyncxattr
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 )
 
@@ -35,3 +36,11 @@ func GetAt(dir *os.File, name, attr string) ([]byte, error) { return nil, errUns
 func SetAt(dir *os.File, name string, values, current map[string][]byte, keep func(name string) bool) error {
 	return errUnsupported
 }
+
+func FakeInfo(info fs.FileInfo, s Stat) fs.FileInfo { return info }
+
+func ReadStat(dir *os.File, name string, info fs.FileInfo) (Stat, bool, error) {
+	return Stat{}, false, nil
+}
+
+func WriteStat(dir *os.File, name string, s *Stat) error { return errUnsupported }

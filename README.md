@@ -202,9 +202,11 @@ negotiate a faster checksum (xxh128).
 * ACLs (`-A`) are not supported. Extended attributes (`-X`, from protocol 30)
   are, on Linux only. Symlinks, devices and specials have no user xattrs on
   Linux; as root, their security and trusted ones go across too (reached
-  through `/proc/self/fd`, so not where that is hidden). `--fake-super` is
-  not supported. On other platforms `-X` is refused, as rsync builds without
-  xattr support refuse it.
+  through `/proc/self/fd`, so not where that is hidden). On other platforms
+  `-X` is refused, as rsync builds without xattr support refuse it.
+* `--fake-super` is supported on Linux, in the format rsync 3.1 and newer
+  write (see below). `--super` is accepted. `-M`/`--remote-option` passes
+  options to the remote side only, for example `-M--fake-super`.
 * Incremental recursion (the `i` capability letter) is not supported, so
   large trees send their whole file list up front.
 * `--compress-threads` is accepted, but zstd compresses on one thread.
@@ -233,6 +235,30 @@ In all environments, the default instructions will take care that:
   [`unveil(2)`](https://man.openbsd.org/unveil.2) API.
 * (On privileged environments) `gokr-rsync` drops privileges to user `nobody`,
   to limit the scope of what an attacker can do when exploiting a vulnerability.
+
+### Backups without root: `fake_super`
+
+A daemon that is not root, or that drops privileges to `nobody`, cannot set
+owners, create devices or keep setuid bits. With `fake_super` on a writable
+module it keeps them the way rsync's `fake super = yes` does: devices,
+FIFOs, sockets and symlinks become regular files, and the real mode, owner
+and device number go into the `user.rsync.%stat` extended attribute, with
+`security.*` and `trusted.*` attributes kept as `user.rsync.security.*` and
+so on. Reading the module back with fake super on gives the sender's view,
+so restoring as root rebuilds the original tree. The format is rsync's
+(3.1 and newer), so a tree written by either can be served by the other.
+
+```toml
+[[module]]
+name = "backup"
+path = "/srv/backup"
+writable = true
+fake_super = true
+```
+
+Without `fake_super`, a client's `--fake-super` is taken as `--super`, as
+rsync does. The filesystem needs `user.*` extended attributes, and this is
+Linux only.
 
 Known gaps:
 

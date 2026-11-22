@@ -148,9 +148,10 @@ func (c *Cache) AppendSend(b []byte, l List) ([]byte, int) {
 }
 
 // Receive reads a file-list entry's xattr list (receive_xattr) and returns
-// its index. keep says which names this side keeps (KeepReceived); the
-// list is stored whole, so indices stay in step with the sender's.
-func (c *Cache) Receive(r io.Reader, keep func(name string) bool) (int, error) {
+// its index. local says which names this side keeps and under what name
+// (Filter.Received); the entries keep the sender's numbers, so requests
+// name the sender's positions.
+func (c *Cache) Receive(r io.Reader, local func(sent string) (string, bool)) (int, error) {
 	ndx, err := rsyncwire.ReadVarint(r)
 	if err != nil {
 		return -1, err
@@ -207,12 +208,14 @@ func (c *Cache) Receive(r io.Reader, keep func(name string) bool) (int, error) {
 				return -1, err
 			}
 		}
-		if keep(e.Name) {
+		if name, ok := local(e.Name); ok {
+			e.Name = name
 			l = append(l, e)
 		}
 	}
-	// rsync re-sorts only where it renames; names are kept as sent here,
-	// in the sender's (sorted) order.
+	// rsync re-sorts where --fake-super renames (need_sort); the numbers
+	// stay the sender's.
+	slices.SortStableFunc(l, func(a, b Entry) int { return strings.Compare(a.Name, b.Name) })
 	return c.store(l), nil
 }
 
@@ -224,6 +227,9 @@ type Filter struct {
 	// Root is whether this side runs as root (am_root). Without it, Linux
 	// only lets it read and write the user namespace.
 	Root bool
+	// Fake is --fake-super (am_root < 0): this side keeps other namespaces
+	// under user.rsync. and its own records (%stat) out of -X.
+	Fake bool
 }
 
 // KeepLocal reports whether the side reading its own files takes name
@@ -231,7 +237,10 @@ type Filter struct {
 // ACLs (-A); a receiver as root the same, otherwise only user names.
 // rsync.%-names only go out with -XX.
 func (f Filter) KeepLocal(name string, isSender bool) bool {
-	userOnly := !isSender && !f.Root
+	if f.Fake && fakeOwn(name) {
+		return false
+	}
+	userOnly := f.Fake || !isSender && !f.Root
 	if userOnly {
 		if !strings.HasPrefix(name, userPrefix) {
 			return false
@@ -245,17 +254,27 @@ func (f Filter) KeepLocal(name string, isSender bool) bool {
 	return true
 }
 
-// KeepReceived reports whether a receiver keeps a name from the file list
-// (receive_xattr): as root every name, otherwise user names only, and
-// rsync.%-names only with -XX.
-func (f Filter) KeepReceived(name string) bool {
-	if !f.Root && !strings.HasPrefix(name, userPrefix) {
-		return false
+// Received reports whether a receiver keeps a name from the file list,
+// and under what name (receive_xattr): as root every name, with
+// --fake-super every name with other namespaces under user.rsync.,
+// otherwise user names only; rsync.%-names only with -XX.
+func (f Filter) Received(name string) (string, bool) {
+	if f.Fake {
+		name = LocalName(name)
+	} else if !f.Root && !strings.HasPrefix(name, userPrefix) {
+		return "", false
 	}
 	if f.Level < 2 && strings.HasPrefix(name, rsyncPercent) {
-		return false
+		return "", false
 	}
-	return true
+	return name, true
+}
+
+// KeepReceived reports whether a receiver keeps a name from the file
+// list under that name.
+func (f Filter) KeepReceived(name string) bool {
+	local, ok := f.Received(name)
+	return ok && local == name
 }
 
 // Diff compares the sender's list for a file with the receiver's own

@@ -3,6 +3,7 @@ package rsyncxattr
 import (
 	"bytes"
 	"crypto/md5"
+	"io/fs"
 	"maps"
 	"slices"
 	"strings"
@@ -58,7 +59,7 @@ func TestSendReceive(t *testing.T) {
 		ndxs = append(ndxs, ndx)
 	}
 	r := bytes.NewReader(wire)
-	keep := Filter{Level: 1, Root: true}.KeepReceived
+	keep := Filter{Level: 1, Root: true}.Received
 	for i, l := range lists {
 		ndx, err := recv.Receive(r, keep)
 		if err != nil {
@@ -114,7 +115,7 @@ func TestFilter(t *testing.T) {
 func TestReceiveKeepsSenderNumbers(t *testing.T) {
 	var send, recv Cache
 	wire, _ := send.AppendSend(nil, FromValues(map[string][]byte{"security.a": []byte("1"), "user.b": long40}))
-	ndx, err := recv.Receive(bytes.NewReader(wire), Filter{Level: 1}.KeepReceived)
+	ndx, err := recv.Receive(bytes.NewReader(wire), Filter{Level: 1}.Received)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +126,7 @@ func TestReceiveKeepsSenderNumbers(t *testing.T) {
 }
 
 func TestReceiveRejects(t *testing.T) {
-	keep := func(string) bool { return true }
+	keep := keepAll
 	for _, tt := range []struct {
 		name string
 		wire []byte
@@ -264,9 +265,91 @@ func FuzzReceive(f *testing.F) {
 		var c Cache
 		r := bytes.NewReader(b)
 		for range 4 {
-			if _, err := c.Receive(r, func(string) bool { return true }); err != nil {
+			if _, err := c.Receive(r, keepAll); err != nil {
 				return
 			}
 		}
 	})
+}
+
+func keepAll(name string) (string, bool) { return name, true }
+
+func TestFakeFilter(t *testing.T) {
+	f := Filter{Level: 1, Fake: true}
+	for _, tt := range []struct {
+		name   string
+		sender bool
+		local  bool
+	}{
+		{"user.a", true, true},
+		{"user.rsync.security.selinux", true, true},
+		{"user.rsync.%stat", false, false},
+		{"user.rsync.%aacl", false, false},
+		{"security.selinux", false, false},
+		{"trusted.x", false, false},
+	} {
+		if got := f.KeepLocal(tt.name, true); got != tt.sender {
+			t.Errorf("KeepLocal(%q, sender) = %v, want %v", tt.name, got, tt.sender)
+		}
+		if got := f.KeepLocal(tt.name, false); got != tt.local {
+			t.Errorf("KeepLocal(%q, receiver) = %v, want %v", tt.name, got, tt.local)
+		}
+	}
+	for _, tt := range []struct{ sent, local string }{
+		{"user.a", "user.a"},
+		{"security.selinux", "user.rsync.security.selinux"},
+		{"trusted.x", "user.rsync.trusted.x"},
+		{"user.rsync.%stat", ""},
+	} {
+		got, ok := f.Received(tt.sent)
+		if ok != (tt.local != "") || got != tt.local {
+			t.Errorf("Received(%q) = %q, %v; want %q", tt.sent, got, ok, tt.local)
+		}
+	}
+	for local, sent := range map[string]string{
+		"user.rsync.security.selinux": "security.selinux",
+		"user.rsync.%stat":            "user.rsync.%stat",
+		"user.a":                      "user.a",
+	} {
+		if got := SendName(local); got != sent {
+			t.Errorf("SendName(%q) = %q, want %q", local, got, sent)
+		}
+	}
+}
+
+// A --fake-super receiver keeps other namespaces under user.rsync., sorted
+// by the new names, with the sender's numbers.
+func TestReceiveFake(t *testing.T) {
+	var send, recv Cache
+	wire, _ := send.AppendSend(nil, FromValues(map[string][]byte{"security.selinux": []byte("ctx"), "user.b": []byte("1")}))
+	ndx, err := recv.Receive(bytes.NewReader(wire), Filter{Level: 1, Fake: true}.Received)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := recv.List(ndx)
+	if len(l) != 2 || l[0].Name != "user.b" || l[0].Num != 2 || l[1].Name != "user.rsync.security.selinux" || l[1].Num != 1 {
+		t.Errorf("list %+v", l)
+	}
+}
+
+func TestStat(t *testing.T) {
+	s := Stat{Mode: 0o20644, Major: 1, Minor: 3, Uid: 1000, Gid: 100}
+	if got := s.String(); got != "20644 1,3 1000:100" {
+		t.Errorf("String = %q", got)
+	}
+	got, err := ParseStat([]byte("20644 1,3 1000:100"))
+	if err != nil || got != s {
+		t.Errorf("ParseStat = %+v, %v", got, err)
+	}
+	if m := s.GoMode(); m.Type() != fs.ModeDevice|fs.ModeCharDevice || m.Perm() != 0o644 {
+		t.Errorf("GoMode = %v", m)
+	}
+	if m := (Stat{Mode: 0o104755}).GoMode(); !m.IsRegular() || m&fs.ModeSetuid == 0 {
+		t.Errorf("setuid GoMode = %v", m)
+	}
+	for _, bad := range []string{"", "644", "x 0,0 0:0", "644 0,0 0"} {
+		if _, err := ParseStat([]byte(bad)); err == nil {
+			t.Errorf("ParseStat(%q): no error", bad)
+		}
+	}
 }

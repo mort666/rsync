@@ -141,9 +141,9 @@ jobs:
         echo "::endgroup::"
         # As root on the runner itself, with every capability: trusted
         # xattrs, also on symlinks and FIFOs, which a container's root
-        # cannot set.
+        # cannot set, and --fake-super as root.
         echo "::group::xattrs as root"
-        sudo env "PATH=$PATH" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" go test -v -run 'Xattr|ReadSet' ./internal/rsyncxattr ./integration/flist
+        sudo env "PATH=$PATH" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" go test -v -run 'Xattr|ReadSet|FakeSuper|StatRecord' ./internal/rsyncxattr ./integration/flist
         echo "::endgroup::"
 
     - name: run tests (macos)

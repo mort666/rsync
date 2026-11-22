@@ -278,5 +278,8 @@ func (o *Options) ServerOptions() []string {
 	// 	}
 	// }
 
+	// -M options go last, as they are (options.c:server_options).
+	sargv = append(sargv, o.remote_options...)
+
 	return sargv
 }
