@@ -286,6 +286,10 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 			return nil, err
 		}
 		f.LinkTarget = string(b)
+		if rt.Opts.MungeLinks {
+			// flist.c:recv_file_entry
+			f.LinkTarget = rsyncopts.SymlinkPrefix + f.LinkTarget
+		}
 	}
 
 	// Hard-link identity, protocols 26 to 29: below 28 for every regular

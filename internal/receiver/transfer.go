@@ -31,6 +31,14 @@ type TransferOpts struct {
 	PreserveSpecials  bool
 	PreserveTimes     bool
 	PreserveHardlinks bool
+
+	// Symlink options on the receiving side: -K counts a symlink to a
+	// folder at the destination as that folder, --safe-links leaves out
+	// symlinks that lead outside the transfer, --munge-links puts
+	// rsyncopts.SymlinkPrefix before every target it creates.
+	KeepDirlinks bool
+	SafeLinks    bool
+	MungeLinks   bool
 	IgnoreTimes       bool
 	AlwaysChecksum    bool
 	WholeFile         bool

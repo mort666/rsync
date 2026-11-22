@@ -10,6 +10,7 @@ import (
 
 	"github.com/gokrazy/rsync/internal/rsynctest"
 	"github.com/gokrazy/rsync/rsyncclient"
+	"github.com/gokrazy/rsync/rsyncd"
 )
 
 // linkTree makes a source with symlinks of every kind -L, -k and
@@ -62,9 +63,11 @@ var linkArgs = [][]string{
 	{"-rtk"},
 	{"-rtl", "--copy-unsafe-links"},
 	{"-rt", "--copy-unsafe-links"},
+	{"-rtl", "--safe-links"},
 }
 
-// TestCopyLinks compares what -L, -k and --copy-unsafe-links leave behind
+// TestCopyLinks compares what -L, -k, --copy-unsafe-links and --safe-links
+// leave behind
 // with stock rsync's own local copy, in all five directions. A daemon
 // keeps a client to its module, so where a daemon sends, the source has
 // no links out of it; where a client sends, it has.
@@ -142,4 +145,109 @@ func TestCopyLinksConfined(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(dest, "dirlink", "inner")); err != nil || string(b) != "inner" {
 		t.Errorf("dirlink/inner: %q, %v", b, err)
 	}
+}
+
+// -K: a symlink to a folder at the destination stands for the folder, so
+// what the sender has in a folder of that name goes into the folder the
+// link points to, and the link stays.
+func TestKeepDirlinks(t *testing.T) {
+	rsynctest.TridgeOrGTFO(t, "compares with stock rsync")
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "linked"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "linked", "f"), []byte("f"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prepare := func(t *testing.T) string {
+		dest := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dest, "real"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("real", filepath.Join(dest, "linked")); err != nil {
+			t.Fatal(err)
+		}
+		return dest
+	}
+	ref := prepare(t)
+	if out, err := stock(t, "-rtK", src+"/", ref+"/"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	want := snapshot(t, ref)
+	if !strings.Contains(want["linked"], "target=") {
+		t.Fatalf("stock rsync replaced the link: %v", want)
+	}
+	for _, dir := range []struct {
+		name string
+		run  func(t *testing.T, dest string) (string, error)
+	}{
+		{"stock to gokrazy", func(t *testing.T, dest string) (string, error) {
+			ts := rsynctest.New(t, rsynctest.WritableInteropModule(dest))
+			return stock(t, "-rtK", src+"/", "rsync://localhost:"+ts.Port+"/interop/")
+		}},
+		{"gokrazy client pulls", func(t *testing.T, dest string) (string, error) {
+			addr, _ := startStockDaemonConf(t, src, "")
+			return gokrazyPull(t, addr, "", dest, "-rtK")
+		}},
+		{"gokrazy to gokrazy", func(t *testing.T, dest string) (string, error) {
+			ts := rsynctest.New(t, rsynctest.WritableInteropModule(dest))
+			return gokrazyRun(t, "localhost:"+ts.Port, "interop/", []string{src + "/"}, []rsyncclient.Option{rsyncclient.WithSender()}, "-rtK")
+		}},
+	} {
+		t.Run(dir.name, func(t *testing.T) {
+			dest := prepare(t)
+			if out, err := dir.run(t, dest); err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			compareSnapshots(t, snapshot(t, dest), want)
+		})
+	}
+}
+
+// --munge-links on a receiving client, and munge_symlinks on a daemon
+// module, which also takes the prefix off what the daemon sends.
+func TestMungeLinks(t *testing.T) {
+	rsynctest.TridgeOrGTFO(t, "compares with stock rsync")
+	src := linkTree(t, false)
+	if err := os.Symlink("/rsyncd-munged/file", filepath.Join(src, "munged")); err != nil {
+		t.Fatal(err)
+	}
+	// A local copy munges on both sides, so a client pulling from a
+	// daemon that does not is the reference.
+	addr, _ := startStockDaemonConf(t, src, "  munge symlinks = no\n")
+	ref := t.TempDir()
+	stock(t, "-rtl", "--munge-links", "rsync://"+addr+"/mod/", ref+"/")
+	want := snapshot(t, ref)
+	if !strings.Contains(want["rel"], "/rsyncd-munged/file") {
+		t.Fatalf("stock rsync did not munge: %v", want)
+	}
+	munged := func(dir string) []rsyncd.Module {
+		m := rsynctest.WritableInteropModule(dir)
+		m[0].MungeSymlinks = true
+		return m
+	}
+	t.Run("gokrazy client pulls", func(t *testing.T) {
+		dest := t.TempDir()
+		gokrazyPull(t, addr, "", dest, "-rtl", "--munge-links")
+		compareSnapshots(t, snapshot(t, dest), want)
+	})
+	t.Run("stock to gokrazy daemon", func(t *testing.T) {
+		// A stock daemon with munge symlinks is the reference here.
+		ref := t.TempDir()
+		addr, _ := startStockDaemonConf(t, ref, "  read only = no\n  munge symlinks = yes\n")
+		stock(t, "-rtl", src+"/", "rsync://"+addr+"/mod/")
+		dest := t.TempDir()
+		ts := rsynctest.New(t, munged(dest))
+		stock(t, "-rtl", src+"/", "rsync://localhost:"+ts.Port+"/interop/")
+		compareSnapshots(t, snapshot(t, dest), snapshot(t, ref))
+	})
+	t.Run("gokrazy daemon sends", func(t *testing.T) {
+		// The munged tree goes back out as it came in.
+		ts := rsynctest.New(t, munged(ref))
+		dest := t.TempDir()
+		stock(t, "-rtl", "rsync://localhost:"+ts.Port+"/interop/", dest+"/")
+		again := t.TempDir()
+		stock(t, "-rtl", src+"/", again+"/")
+		compareSnapshots(t, snapshot(t, dest), snapshot(t, again))
+	})
 }

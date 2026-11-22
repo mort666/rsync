@@ -46,6 +46,14 @@ type Module struct {
 	// xattr, as rsyncd.conf's "fake super" does. Without it, a client's
 	// --fake-super is taken as --super. Linux only.
 	FakeSuper bool `toml:"fake_super"`
+	// MungeSymlinks puts /rsyncd-munged/ before the target of every
+	// symlink the daemon creates, and takes it off those it sends, as
+	// rsyncd.conf's "munge symlinks" does, so that no link written into
+	// the module leads anywhere when something else follows it. Unlike
+	// rsync, which turns it on when it does not chroot, it is off unless
+	// set: the daemon reaches modules through os.Root, which keeps it
+	// inside them whatever the links say. A client cannot change it.
+	MungeSymlinks bool `toml:"munge_symlinks"`
 }
 
 // Option specifies the server options.
@@ -336,6 +344,9 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	if err == nil {
 		err = pc.Options.SetFakeSuper(module.FakeSuper)
 	}
+	if err == nil {
+		pc.Options.SetMungeLinks(module.MungeSymlinks)
+	}
 	if err != nil {
 		err = fmt.Errorf("parsing server args: %v", err)
 
@@ -604,6 +615,9 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			PreserveGid:      opts.PreserveGid(),
 			PreserveUid:      opts.PreserveUid(),
 			PreserveLinks:    opts.PreserveLinks(),
+			KeepDirlinks:     opts.KeepDirlinks(),
+			SafeLinks:        opts.SafeLinks(),
+			MungeLinks:       opts.MungeLinks(),
 			PreservePerms:    opts.PreservePerms(),
 			PreserveDevices:  opts.PreserveDevices(),
 			PreserveSpecials: opts.PreserveSpecials(),

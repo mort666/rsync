@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/gokrazy/rsync/internal/rsynccommon"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
+	"github.com/gokrazy/rsync/internal/safelink"
 )
 
 // rsync/generator.c:generate_files()
@@ -176,6 +178,13 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 	st, err := rt.lstat(f.Name)
 
 	mode := f.Mode & rsync.S_IFMT
+	if mode == rsync.S_IFDIR && rt.Opts.KeepDirlinks && err == nil && st.Mode()&fs.ModeSymlink != 0 {
+		// -K: a symlink to a folder stands for the folder
+		// (generator.c:gen_entry_stat with follow_dirlinks).
+		if target, terr := rt.DestRoot.Stat(f.Name); terr == nil && target.IsDir() {
+			st = target
+		}
+	}
 	if mode == rsync.S_IFDIR {
 		if rt.Opts.DryRun {
 			return nil
@@ -227,7 +236,12 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 	perm := rt.destPerm(f, destSt)
 
 	if rt.Opts.PreserveLinks && mode == rsync.S_IFLNK {
-		// TODO: safe_symlinks option
+		if rt.Opts.SafeLinks && safelink.Unsafe(f.LinkTarget, f.Name) {
+			if rt.Opts.Verbose {
+				rt.info(fmt.Sprintf("ignoring unsafe symlink \"%s\" -> \"%s\"\n", f.Name, f.LinkTarget))
+			}
+			return nil
+		}
 		if err == nil {
 			// local file exists, verify target matches
 			if target, err := rt.readlink(f.Name); err == nil {
@@ -503,4 +517,13 @@ func (rt *Transfer) generateAndSendSums(in *os.File, fileLen int64) error {
 		remaining -= n1
 	}
 	return nil
+}
+
+// info tells the client msg, as rsync's FINFO, or logs it on a client.
+func (rt *Transfer) info(msg string) {
+	if rt.TellClient != nil {
+		rt.TellClient(rsyncwire.MsgInfo, msg)
+		return
+	}
+	rt.Logger.Printf("%s", strings.TrimSuffix(msg, "\n"))
 }
