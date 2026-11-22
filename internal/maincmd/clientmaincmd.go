@@ -96,7 +96,7 @@ func rsyncMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		// source is local
 		// other = src
 		paths = sources
-		roDirs = sources
+		roDirs = linkReadDirs(opts, sources)
 		if opts.LocalServer() {
 			// source and dest are both local
 			rwDirs = []string{dest}
@@ -480,19 +480,21 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			DryRun:   opts.DryRun(),
 			Progress: opts.Progress(),
 
-			DeleteMode:       opts.DeleteMode(),
-			PreserveGid:      opts.PreserveGid(),
-			PreserveUid:      opts.PreserveUid(),
-			PreserveLinks:    opts.PreserveLinks(),
-			PreservePerms:    opts.PreservePerms(),
-			PreserveDevices:  opts.PreserveDevices(),
-			PreserveSpecials: opts.PreserveSpecials(),
-			PreserveTimes:    opts.PreserveMTimes(),
-			OmitDirTimes:     opts.OmitDirTimes(),
-			// -H is not passed on to the server (gokrazy/rsync cannot
-			// create hard links), so the server's file list carries no
-			// hard-link data for the receiver to read.
-			PreserveHardlinks: false,
+			DeleteMode:        opts.DeleteMode(),
+			PreserveGid:       opts.PreserveGid(),
+			PreserveUid:       opts.PreserveUid(),
+			PreserveLinks:     opts.PreserveLinks(),
+			KeepDirlinks:      opts.KeepDirlinks(),
+			SafeLinks:         opts.SafeLinks(),
+			MungeLinks:        opts.MungeLinks(),
+			BasisDirs:         opts.BasisDirs(),
+			AltDest:           opts.AltDestType(),
+			PreservePerms:     opts.PreservePerms(),
+			PreserveDevices:   opts.PreserveDevices(),
+			PreserveSpecials:  opts.PreserveSpecials(),
+			PreserveTimes:     opts.PreserveMTimes(),
+			OmitDirTimes:      opts.OmitDirTimes(),
+			PreserveHardlinks: opts.PreserveHardLinks(),
 			IgnoreTimes:       opts.IgnoreTimes(),
 			AlwaysChecksum:    opts.AlwaysChecksum(),
 			WholeFile:         opts.WholeFile(),
@@ -537,7 +539,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		}
 		defer rt.DestRoot.Close()
 		if osenv.Restrict() {
-			if err := restrict.MaybeFileSystem(nil, []string{rt.Dest}); err != nil {
+			if err := restrict.MaybeFileSystem(nil, append([]string{rt.Dest}, basisDirs(opts, rt.Dest)...)); err != nil {
 				return nil, nil, fmt.Errorf("landlock: %v", err)
 			}
 		}
@@ -597,4 +599,31 @@ func clientMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options
 	dest := remaining[len(remaining)-1]
 	sources := remaining[:len(remaining)-1]
 	return rsyncMain(ctx, osenv, opts, sources, dest)
+}
+
+// linkReadDirs is what a sender may read: its sources, or with -L, -k or
+// --copy-unsafe-links anything, as the links it follows may lead anywhere
+// (rsync has no such limit). Writing stays limited either way.
+func linkReadDirs(opts *rsyncopts.Options, sources []string) []string {
+	if opts.CopyLinks() || opts.CopyDirlinks() || opts.CopyUnsafeLinks() {
+		return []string{"/"}
+	}
+	return sources
+}
+
+// basisDirs are the alternate folders of --link-dest and the like, a
+// relative one taken from dest, for the Landlock rules: linking from one
+// needs the refer right there as at the destination, which comes with
+// read-write access.
+func basisDirs(opts *rsyncopts.Options, dest string) []string {
+	var dirs []string
+	for _, dir := range opts.BasisDirs() {
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(dest, dir)
+		}
+		if _, err := os.Stat(dir); err == nil { // Landlock refuses missing paths
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
 }

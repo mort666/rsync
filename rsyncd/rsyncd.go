@@ -46,6 +46,14 @@ type Module struct {
 	// xattr, as rsyncd.conf's "fake super" does. Without it, a client's
 	// --fake-super is taken as --super. Linux only.
 	FakeSuper bool `toml:"fake_super"`
+	// MungeSymlinks puts /rsyncd-munged/ before the target of every
+	// symlink the daemon creates, and takes it off those it sends, as
+	// rsyncd.conf's "munge symlinks" does, so that no link written into
+	// the module leads anywhere when something else follows it. Unlike
+	// rsync, which turns it on when it does not chroot, it is off unless
+	// set: the daemon reaches modules through os.Root, which keeps it
+	// inside them whatever the links say. A client cannot change it.
+	MungeSymlinks bool `toml:"munge_symlinks"`
 }
 
 // Option specifies the server options.
@@ -336,6 +344,9 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	if err == nil {
 		err = pc.Options.SetFakeSuper(module.FakeSuper)
 	}
+	if err == nil {
+		pc.Options.SetMungeLinks(module.MungeSymlinks)
+	}
 	if err != nil {
 		err = fmt.Errorf("parsing server args: %v", err)
 
@@ -600,19 +611,24 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			Verbose:  opts.Verbose(),
 			Progress: opts.Progress(),
 
-			DeleteMode:       opts.DeleteMode(),
-			PreserveGid:      opts.PreserveGid(),
-			PreserveUid:      opts.PreserveUid(),
-			PreserveLinks:    opts.PreserveLinks(),
-			PreservePerms:    opts.PreservePerms(),
-			PreserveDevices:  opts.PreserveDevices(),
-			PreserveSpecials: opts.PreserveSpecials(),
-			PreserveTimes:    opts.PreserveMTimes(),
-			OmitDirTimes:     opts.OmitDirTimes(),
-			// TODO: PreserveHardlinks: opts.PreserveHardlinks,
-			IgnoreTimes:    opts.IgnoreTimes(),
-			AlwaysChecksum: opts.AlwaysChecksum(),
-			WholeFile:      opts.WholeFile(),
+			DeleteMode:        opts.DeleteMode(),
+			PreserveGid:       opts.PreserveGid(),
+			PreserveUid:       opts.PreserveUid(),
+			PreserveLinks:     opts.PreserveLinks(),
+			KeepDirlinks:      opts.KeepDirlinks(),
+			SafeLinks:         opts.SafeLinks(),
+			MungeLinks:        opts.MungeLinks(),
+			BasisDirs:         opts.BasisDirs(),
+			AltDest:           opts.AltDestType(),
+			PreservePerms:     opts.PreservePerms(),
+			PreserveDevices:   opts.PreserveDevices(),
+			PreserveSpecials:  opts.PreserveSpecials(),
+			PreserveTimes:     opts.PreserveMTimes(),
+			OmitDirTimes:      opts.OmitDirTimes(),
+			PreserveHardlinks: opts.PreserveHardLinks(),
+			IgnoreTimes:       opts.IgnoreTimes(),
+			AlwaysChecksum:    opts.AlwaysChecksum(),
+			WholeFile:         opts.WholeFile(),
 
 			Inplace:        opts.Inplace(),
 			BlockSize:      opts.BlockSize(),
@@ -649,6 +665,21 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 	defer rt.DestRoot.Close()
 
 	if !implicitModule {
+		// Alternate folders (--link-dest and the like) stay inside the
+		// module, as in a chrooted rsync daemon: an absolute one is taken
+		// from the module's top, a relative one from the destination.
+		moduleRoot, destRel := rt.DestRoot, "."
+		if len(paths) == 1 {
+			destRel = filepath.Clean(strings.Trim(paths[0], "/"))
+		}
+		rt.OpenBasisDir = func(dir string) (*os.Root, error) {
+			if filepath.IsAbs(dir) {
+				dir = strings.TrimLeft(dir, "/")
+			} else {
+				dir = filepath.Join(destRel, dir)
+			}
+			return moduleRoot.OpenRoot(filepath.Clean(dir))
+		}
 		if len(paths) > 1 {
 			return fmt.Errorf("module is available, and at most one destination path is allowed, got %q", paths)
 		}
@@ -686,10 +717,6 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 		}
 	}
 
-	if opts.PreserveHardLinks() {
-		return fmt.Errorf("support for hard links not yet implemented")
-	}
-
 	if opts.ReceiverWantsFilterList(c.Session.Protocol) {
 		// receive the exclusion list (openrsync’s is always empty)
 		exclusionList, err := sender.RecvFilterList(c)
@@ -723,6 +750,9 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 
 // handleConnSender is equivalent to rsync/main.c:do_server_sender
 func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter, env *rsyncos.Env) (err error) {
+	// A daemon module keeps followed links inside it; a server over a
+	// remote shell has no module and follows them anywhere, as rsync does.
+	confined := module != nil
 	if module == nil {
 		module = &Module{
 			Name: "implicit",
@@ -749,6 +779,7 @@ func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader,
 	if module.FS != nil {
 		st.Source = sender.NewFSSource(module.FS)
 	}
+	st.Confined = confined
 
 	exclusionList, err := sender.RecvFilterList(st.Conn)
 	if err != nil {

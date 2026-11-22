@@ -63,3 +63,16 @@ func (rt *Transfer) setUid(f *File, st fs.FileInfo) (fs.FileInfo, error) {
 	}
 	return rt.DestRoot.Lstat(f.Name)
 }
+
+// ownerDiffers reports whether f's owner or group differ from st's, in a
+// way this receiver would change (generator.c:ownership_differs).
+func (rt *Transfer) ownerDiffers(f *File, st fs.FileInfo) bool {
+	stt, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	if rt.Opts.PreserveUid && rt.amRoot() && stt.Uid != uint32(f.Uid) {
+		return true
+	}
+	return rt.Opts.PreserveGid && (rt.amRoot() || inGroup[uint32(f.Gid)]) && stt.Gid != uint32(f.Gid)
+}

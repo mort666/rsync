@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,12 +16,16 @@ import (
 	"github.com/gokrazy/rsync/internal/rsynccommon"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
 	"github.com/gokrazy/rsync/internal/rsyncwire"
+	"github.com/gokrazy/rsync/internal/safelink"
 )
 
 // rsync/generator.c:generate_files()
 func (rt *Transfer) GenerateFiles(fileList []*File) error {
 	phase := 0
 	for idx, f := range fileList {
+		if _, ok := rt.hlinkLater[f]; ok {
+			continue // linked to its group's first at the end
+		}
 		if !rt.listOnly() {
 			rt.genXattr = rt.checkXattrs(f)
 		}
@@ -130,10 +135,15 @@ func (rt *Transfer) setPerms(f *File, perm fs.FileMode) error {
 	isLink := f.Mode&rsync.S_IFMT == rsync.S_IFLNK && !rt.Opts.FakeSuper
 	isDir := f.Mode&rsync.S_IFMT == rsync.S_IFDIR
 	if rt.Opts.PreserveTimes &&
-		!isLink &&
 		!(isDir && rt.Opts.OmitDirTimes) &&
 		!st.ModTime().Equal(f.ModTime) {
-		if err := rt.DestRoot.Chtimes(f.Name, f.ModTime, f.ModTime); err != nil {
+		set := rt.DestRoot.Chtimes
+		// rsync sets times without following a link, so with -K a
+		// folder's times go on the link standing for it.
+		if isLink || st.Mode()&fs.ModeSymlink != 0 {
+			set = func(name string, _, mtime time.Time) error { return rt.lchtimes(name, mtime) }
+		}
+		if err := set(f.Name, f.ModTime, f.ModTime); err != nil {
 			return err
 		}
 	}
@@ -176,6 +186,13 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 	st, err := rt.lstat(f.Name)
 
 	mode := f.Mode & rsync.S_IFMT
+	if mode == rsync.S_IFDIR && rt.Opts.KeepDirlinks && err == nil && st.Mode()&fs.ModeSymlink != 0 {
+		// -K: a symlink to a folder stands for the folder
+		// (generator.c:gen_entry_stat with follow_dirlinks).
+		if target, terr := rt.DestRoot.Stat(f.Name); terr == nil && target.IsDir() {
+			st = target
+		}
+	}
 	if mode == rsync.S_IFDIR {
 		if rt.Opts.DryRun {
 			return nil
@@ -227,7 +244,12 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 	perm := rt.destPerm(f, destSt)
 
 	if rt.Opts.PreserveLinks && mode == rsync.S_IFLNK {
-		// TODO: safe_symlinks option
+		if rt.Opts.SafeLinks && safelink.Unsafe(f.LinkTarget, f.Name) {
+			if rt.Opts.Verbose {
+				rt.info(fmt.Sprintf("ignoring unsafe symlink \"%s\" -> \"%s\"\n", f.Name, f.LinkTarget))
+			}
+			return nil
+		}
 		if err == nil {
 			// local file exists, verify target matches
 			if target, err := rt.readlink(f.Name); err == nil {
@@ -243,6 +265,9 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 				// fallthrough to create or replace the symlink
 			}
 			// fallthrough to create or replace the symlink
+		}
+		if err != nil && len(rt.basisRoots) > 0 && rt.tryDestsNon(f) {
+			return nil
 		}
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			rt.Logger.Printf("symlink %s -> %s", f.Name, f.LinkTarget)
@@ -264,6 +289,9 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		mode == rsync.S_IFBLK ||
 		mode == rsync.S_IFSOCK ||
 		mode == rsync.S_IFIFO) {
+		if err != nil && len(rt.basisRoots) > 0 && !rt.Opts.FakeSuper && rt.tryDestsNon(f) {
+			return nil
+		}
 		if (mode == rsync.S_IFCHR || mode == rsync.S_IFBLK) && rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			major, minor := splitRdev(f.Rdev)
 			rt.Logger.Printf("mknod(%s, 0%o, [%d,%d])", f.Name, f.Mode, major, minor)
@@ -278,10 +306,6 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 			return err
 		}
 		return nil
-	}
-
-	if rt.Opts.PreserveHardlinks {
-		// TODO: hard link check
 	}
 
 	if !f.FileMode().IsRegular() {
@@ -316,6 +340,31 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 			return nil
 		}
 		// no partial file? fall through.
+	}
+
+	if err == nil && !st.Mode().IsRegular() && len(rt.basisRoots) > 0 {
+		// Make room first, so that the alternate folders are asked as for
+		// a file that is not there (generator.c:recv_generator).
+		if err := rt.DestRoot.Remove(f.Name); err != nil {
+			return fmt.Errorf("unlinking to make room for regular file: %v", err)
+		}
+		err = fs.ErrNotExist
+	}
+	if len(rt.basisRoots) > 0 && (err != nil || rt.Opts.AltDest != rsyncopts.CopyDest) {
+		var destSt fs.FileInfo
+		if err == nil {
+			destSt = st
+		}
+		done, basis, aerr := rt.tryDestsReg(f, destSt, perm)
+		if aerr != nil {
+			return aerr
+		}
+		if done {
+			return nil
+		}
+		if basis >= 0 {
+			return rt.requestFromBasis(idx, f, basis)
+		}
 	}
 
 	if os.IsNotExist(err) {
@@ -503,4 +552,36 @@ func (rt *Transfer) generateAndSendSums(in *os.File, fileLen int64) error {
 		remaining -= n1
 	}
 	return nil
+}
+
+// info tells the client msg, as rsync's FINFO, or logs it on a client.
+func (rt *Transfer) info(msg string) {
+	if rt.TellClient != nil {
+		rt.TellClient(rsyncwire.MsgInfo, msg)
+		return
+	}
+	rt.Logger.Printf("%s", strings.TrimSuffix(msg, "\n"))
+}
+
+// requestFromBasis asks for f with the block sums of its copy in the
+// alternate folder basis, which the receiver then reads too
+// (FNAMECMP_BASIS_DIR_LOW + basis).
+func (rt *Transfer) requestFromBasis(idx int, f *File, basis int) error {
+	in, err := rt.basisRoots[basis].Open(f.Name)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	st, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if err := rt.requestFile(idx, rt.changedFlags(f, st), byte(rsync.FNAMECMP_BASIS_DIR_LOW+basis)); err != nil {
+		return err
+	}
+	if rt.Opts.DryRun {
+		return nil
+	}
+	rt.altBasis.Store(f, basis)
+	return rt.generateAndSendSums(in, st.Size())
 }

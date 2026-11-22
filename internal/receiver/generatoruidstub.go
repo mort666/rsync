@@ -7,3 +7,5 @@ import "io/fs"
 func (rt *Transfer) setUid(_ *File, st fs.FileInfo) (fs.FileInfo, error) {
 	return st, nil
 }
+
+func (rt *Transfer) ownerDiffers(*File, fs.FileInfo) bool { return false }

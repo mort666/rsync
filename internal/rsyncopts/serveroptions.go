@@ -49,8 +49,20 @@ func (o *Options) ServerOptions() []string {
 	if o.PreserveLinks() {
 		argstr += "l"
 	}
-	// if (copy_links)
-	// 	argstr[x++] = 'L';
+	// A sending client keeps its own -L and -k and the far end keeps the
+	// folder links it has; a receiving one asks the sender to follow.
+	if o.Sender() {
+		if o.KeepDirlinks() {
+			argstr += "K"
+		}
+	} else {
+		if o.CopyLinks() {
+			argstr += "L"
+		}
+		if o.CopyDirlinks() {
+			argstr += "k"
+		}
+	}
 
 	if o.whole_file > 0 && o.append_mode == 0 {
 		argstr += "W"
@@ -59,8 +71,9 @@ func (o *Options) ServerOptions() []string {
 	//  * default for remote transfers, and in any case old versions
 	//  * of rsync will not understand it. */
 
-	// if (preserve_hard_links)
-	// 	argstr[x++] = 'H';
+	if o.PreserveHardLinks() {
+		argstr += "H"
+	}
 	if o.PreserveUid() {
 		argstr += "o"
 	}
@@ -237,11 +250,19 @@ func (o *Options) ServerOptions() []string {
 	// if (ignore_errors)
 	// 	args[ac++] = "--ignore-errors";
 
-	// if (copy_unsafe_links)
-	// 	args[ac++] = "--copy-unsafe-links";
-
-	// if (safe_symlinks)
-	// 	args[ac++] = "--safe-links";
+	// Only a receiving server needs the alternate folders
+	// (options.c:server_options).
+	if o.Sender() {
+		for _, dir := range o.basis_dirs {
+			sargv = append(sargv, AltDestOption(o.alt_dest_type), dir)
+		}
+	}
+	if o.CopyUnsafeLinks() {
+		sargv = append(sargv, "--copy-unsafe-links")
+	}
+	if o.SafeLinks() {
+		sargv = append(sargv, "--safe-links")
+	}
 
 	// if (numeric_ids)
 	// 	args[ac++] = "--numeric-ids";

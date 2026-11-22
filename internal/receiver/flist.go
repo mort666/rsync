@@ -50,6 +50,13 @@ type File struct {
 	rdevMajor uint32
 	hlinkDev  int64
 
+	// hlinked marks a member of a hard-link group (-H), and hlinkGroup
+	// names the group: from protocol 30 the index, in the list as sent, of
+	// its first member, below 30 a number given to its device and inode.
+	hlinked    bool
+	hlinkGroup int64
+	hlinkIno   int64
+
 	// xattrList is the index of the entry's xattr list (-X), plus one: 0
 	// for none.
 	xattrList int
@@ -79,7 +86,10 @@ func (f *File) FileMode() fs.FileMode {
 }
 
 // rsync/flist.c:receive_file_entry
-func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
+//
+// list is the list as received so far, which a hard-linked entry at
+// protocol 30 and up may refer back into.
+func (rt *Transfer) receiveFileEntry(flags uint16, last *File, list []*File) (*File, error) {
 	f := &File{rdevMajor: last.rdevMajor, hlinkDev: last.hlinkDev}
 	proto := rt.Conn.Session.Protocol
 
@@ -131,12 +141,30 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 	}
 	f.Name = filepath.Clean(string(b))
 
+	// From protocol 30 the first file of a hard-link group goes in full;
+	// a later one names the first by its index in the list as sent, and
+	// takes everything but its name and xattrs from it.
 	if proto >= 30 && rt.Opts.PreserveHardlinks && flags&rsync.XMIT_HLINKED != 0 {
-		// A protocol 30 sender abbreviates the later files of a
-		// hard-link group to a reference. Neither gokrazy/rsync receiver
-		// takes -H (the client does not pass it on, the daemon refuses
-		// it), so this cannot be asked for.
-		return nil, fmt.Errorf("hard-link data at protocol %d is not supported", proto)
+		f.hlinked = true
+		f.hlinkGroup = int64(len(list))
+		if flags&rsync.XMIT_HLINK_FIRST == 0 {
+			first, err := rt.Conn.ReadVarint()
+			if err != nil {
+				return nil, err
+			}
+			if first < 0 || int(first) >= len(list) {
+				return nil, fmt.Errorf("hard-link reference out of range: %d (%d)", first, len(list))
+			}
+			src := list[first]
+			f.hlinkGroup = int64(first)
+			f.Length, f.ModTime, f.Mode = src.Length, src.ModTime, src.Mode
+			f.Uid, f.Gid, f.Rdev = src.Uid, src.Gid, src.Rdev
+			f.LinkTarget, f.Checksum = src.LinkTarget, src.Checksum
+			if t := f.Mode & rsync.S_IFMT; rt.Opts.PreserveDevices && (t == rsync.S_IFCHR || t == rsync.S_IFBLK) {
+				f.rdevMajor = src.rdevMajor // later entries repeat it
+			}
+			return rt.finishFileEntry(f)
+		}
 	}
 
 	length, err := rt.Conn.ReadVarlong30(3)
@@ -286,11 +314,15 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 			return nil, err
 		}
 		f.LinkTarget = string(b)
+		if rt.Opts.MungeLinks {
+			// flist.c:recv_file_entry
+			f.LinkTarget = rsyncopts.SymlinkPrefix + f.LinkTarget
+		}
 	}
 
 	// Hard-link identity, protocols 26 to 29: below 28 for every regular
-	// file, from 28 for entries flagged XMIT_HLINKED. It is read to stay in
-	// step with the sender; this receiver does not create hard links yet.
+	// file, from 28 for entries flagged XMIT_HLINKED. ReceiveFileList
+	// groups entries by it.
 	if rt.Opts.PreserveHardlinks && proto < 30 && (proto < 28 && isReg || proto >= 28 && flags&rsync.XMIT_HLINKED != 0) {
 		if proto < 28 || flags&rsync.XMIT_SAME_DEV_pre30 == 0 {
 			dev, err := rt.Conn.ReadInt64()
@@ -299,9 +331,11 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 			}
 			f.hlinkDev = dev - 1 // sent 1-incremented so it is never 0
 		}
-		if _, err := rt.Conn.ReadInt64(); err != nil { // inode
+		ino, err := rt.Conn.ReadInt64()
+		if err != nil {
 			return nil, err
 		}
+		f.hlinked, f.hlinkIno = true, ino
 	}
 
 	// Before protocol 28, every entry carried a checksum, all zeros for
@@ -315,6 +349,12 @@ func (rt *Transfer) receiveFileEntry(flags uint16, last *File) (*File, error) {
 		}
 	}
 
+	return rt.finishFileEntry(f)
+}
+
+// finishFileEntry reads what follows every entry, its xattrs, and checks
+// it.
+func (rt *Transfer) finishFileEntry(f *File) (*File, error) {
 	if rt.xattrs() {
 		if err := rt.receiveXattrs(f); err != nil {
 			return nil, err
@@ -355,6 +395,8 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 	lastFileEntry := new(File)
 	var fileList []*File
 	var endListIOErrors int32
+	hlinkIDs := make(map[[2]int64]int64) // below protocol 30
+
 	for {
 		// With CF_VARINT_FLIST_FLAGS the flags are a varint, and 0 ends
 		// the list, followed by the I/O error. Otherwise one byte, two
@@ -408,9 +450,19 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 			}
 		}
 
-		f, err := rt.receiveFileEntry(flags, lastFileEntry)
+		f, err := rt.receiveFileEntry(flags, lastFileEntry, fileList)
 		if err != nil {
 			return nil, err
+		}
+		if f.hlinked && rt.Conn.Session.Protocol < 30 {
+			// flist.c:recv_file_entry, idev_find
+			key := [2]int64{f.hlinkDev, f.hlinkIno}
+			group, ok := hlinkIDs[key]
+			if !ok {
+				group = int64(len(hlinkIDs))
+				hlinkIDs[key] = group
+			}
+			f.hlinkGroup = group
 		}
 		lastFileEntry = f
 		// TODO: include depth in output?

@@ -158,6 +158,8 @@ In my tests, `gokr-rsync` can easily transfer data at > 6 Gbit/s. With older pee
 - `--fake-super` is supported on Linux, in the format rsync 3.1 and newer write (see below). `--super` is accepted. `-M`/`--remote-option` passes options to the remote side only, for example `-M--fake-super`.
 - Incremental recursion (the `i` capability letter) is not supported, so large trees send their whole file list up front.
 - `--compress-threads` is accepted, but zstd compresses on one thread.
+- Links follow rsync: `-l`, `-L`, `-k`, `-K`, `--safe-links`, `--copy-unsafe-links`, `--munge-links` and `-H`, both ways. A daemon follows links with `-L` and the like only inside its module, as a chrooted rsync daemon does; a client or SSH server follows them anywhere, and its Landlock rules then allow reading anywhere. A link back into a folder the walk is already in is reported and skipped, where rsync recurses until the kernel stops it. Symlink times are set on Unix.
+- `--link-dest`, `--copy-dest` and `--compare-dest` work, up to 20 folders. A daemon resolves them inside the module (an absolute one from the module's top) and refuses one that leads out. A match is hard-linked with `linkat`; on Windows, or across file systems, it is copied, as rsync does when it cannot link.
 
 ## Supported environments and privilege dropping
 
@@ -174,6 +176,10 @@ In all environments, the default instructions will take care that:
 - (On privileged Linux only) Only configured rsync modules from the host file system are mounted (**read-only**, unless the module is `writable`) into a Linux mount namespace for `gokr-rsync`, to guard against data modification and data exfiltration.
 - (On Linux only) File system access is restricted using the [Landlock](https://docs.kernel.org/userspace-api/landlock.html) Linux kernel security module, which works similar to OpenBSD's [`unveil(2)`](https://man.openbsd.org/unveil.2) API.
 - (On privileged environments) `gokr-rsync` drops privileges to user `nobody`, to limit the scope of what an attacker can do when exploiting a vulnerability.
+
+### Symlinks in modules: `munge_symlinks`
+
+A writable module with `munge_symlinks = true` puts `/rsyncd-munged/` before the target of every symlink it receives, and takes it off what it sends, as rsyncd.conf's `munge symlinks` does, so that a link written by a client leads nowhere for other programs that follow it. rsync turns this on by default when it does not chroot; gokrazy leaves it off, as it reaches modules only through `os.Root`, which keeps the daemon itself inside them whatever the links say. A client cannot change it.
 
 ### Backups without root: `fake_super`
 

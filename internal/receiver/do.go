@@ -149,6 +149,14 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 		}
 	}
 
+	if rt.Opts.PreserveHardlinks {
+		rt.hlinkLater = matchHardLinks(fileList)
+	}
+	if len(rt.Opts.BasisDirs) > 0 {
+		rt.openBasisDirs()
+		defer rt.closeBasisDirs()
+	}
+
 	var eg errgroup.Group
 	// Close the connection as soon as either goroutine fails, so the other one
 	// stops blocking on a read or write that will never complete.
@@ -167,6 +175,7 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 	if err := eg.Wait(); err != nil {
 		return nil, err
 	}
+	rt.linkHardLinks(fileList)
 	if len(rt.retouchDirs) > 0 /* || rt.retouchDirTimes */ {
 		if err := rt.touchUpDirs(); err != nil {
 			return nil, err

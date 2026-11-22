@@ -117,7 +117,11 @@ func (rt *Transfer) recvFile1(f *File) error {
 		// fallthrough to local file
 	}
 
-	localFile, err := rt.openLocalFile(f)
+	open := rt.openLocalFile
+	if basis, ok := rt.altBasis.Load(f); ok {
+		open = func(f *File) (*os.File, error) { return rt.basisRoots[basis.(int)].Open(f.Name) }
+	}
+	localFile, err := open(f)
 	if err != nil && !os.IsNotExist(err) {
 		rt.Logger.Printf("opening local file failed, continuing: %v", err)
 	}

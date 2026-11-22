@@ -122,7 +122,7 @@ func Main(ctx context.Context, osenv *rsyncos.Env, args []string, cfg *rsyncdcon
 		}
 		var roDirs, rwDirs []string
 		if opts.Sender() {
-			roDirs = append(roDirs, paths...)
+			roDirs = linkReadDirs(opts, paths)
 		} else {
 			for _, path := range paths {
 				if err := os.MkdirAll(path, 0755); err != nil {
@@ -130,6 +130,9 @@ func Main(ctx context.Context, osenv *rsyncos.Env, args []string, cfg *rsyncdcon
 				}
 			}
 			rwDirs = append(rwDirs, paths...)
+			if len(paths) > 0 {
+				rwDirs = append(rwDirs, basisDirs(opts, paths[0])...)
+			}
 		}
 		if osenv.Restrict() {
 			if err := restrict.MaybeFileSystem(roDirs, rwDirs); err != nil {
