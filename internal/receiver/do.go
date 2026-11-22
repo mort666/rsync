@@ -141,6 +141,7 @@ func (rt *Transfer) deleteFailed(path string, err error) {
 // rsync/main.c:do_recv
 func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsyncstats.TransferStats, error) {
 	rt.defaultPerms = defaultPerms()
+	defer rt.closeDecoder()
 
 	if rt.Opts.DeleteMode {
 		if err := rt.deleteFiles(fileList); err != nil {

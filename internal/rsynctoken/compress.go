@@ -15,17 +15,6 @@ import (
 // leave names out but must never reorder them.
 var Names = []string{"zstd", "lz4", "zlibx", "zlib", "none"}
 
-// receiveNames are the ones this side can read: all but zstd.
-var receiveNames = []string{"lz4", "zlibx", "zlib", "none"}
-
-// supported is the list for a side that sends (isSender) or receives.
-func supported(isSender bool) []string {
-	if isSender {
-		return Names
-	}
-	return receiveNames
-}
-
 // Negotiate settles a session's compressor, as compat.c
 // negotiate_the_strings and parse_compress_choice do, right after the
 // checksum (rsyncchecksum.Negotiate). choice is what the options asked for
@@ -38,7 +27,7 @@ func supported(isSender bool) []string {
 //
 // level is --compress-level, or a negative value for the compressor's
 // default. A zlib level of 0 turns compression off, as it does in rsync.
-func Negotiate(c *rsyncwire.Conn, choice string, level int, isServer, isSender bool) error {
+func Negotiate(c *rsyncwire.Conn, choice string, level int, isServer bool) error {
 	s := &c.Session
 	s.Compress, s.CompressLevel = "", 0
 	switch choice {
@@ -49,14 +38,14 @@ func Negotiate(c *rsyncwire.Conn, choice string, level int, isServer, isSender b
 			s.Compress = "zlib"
 			break
 		}
-		ours := rsyncwire.OurList(os.Getenv("RSYNC_COMPRESS_LIST"), isServer, supported(isSender), supported(isSender))
+		ours := rsyncwire.OurList(os.Getenv("RSYNC_COMPRESS_LIST"), isServer, Names, Names)
 		name, err := c.NegotiateName("compress", ours, isServer)
 		if err != nil {
 			return err
 		}
 		s.Compress = name
 	default:
-		if err := CheckChoice(choice, isSender); err != nil {
+		if err := CheckChoice(choice); err != nil {
 			return err
 		}
 		s.Compress = choice
@@ -72,18 +61,15 @@ func Negotiate(c *rsyncwire.Conn, choice string, level int, isServer, isSender b
 	return nil
 }
 
-// CheckChoice reports whether a side that sends (isSender) or receives can
-// use the compressor choice names (see rsyncopts.Options.CompressChoice).
-func CheckChoice(choice string, isSender bool) error {
+// CheckChoice reports whether choice names a compressor this side has
+// (see rsyncopts.Options.CompressChoice).
+func CheckChoice(choice string) error {
 	switch choice {
 	case "", "auto", "none":
 		return nil
 	}
 	if !slices.Contains(Names, choice) {
 		return fmt.Errorf("unknown compress name: %s (supported: %s)", choice, strings.Join(Names, " "))
-	}
-	if !slices.Contains(supported(isSender), choice) {
-		return fmt.Errorf("gokrazy/rsync cannot receive %s-compressed data (it can receive: %s)", choice, strings.Join(receiveNames, " "))
 	}
 	return nil
 }
@@ -135,6 +121,8 @@ func NewDecoder(s rsyncwire.Session, r io.Reader) (Decoder, error) {
 		return newDeflateDecoder(r, s.Compress == "zlibx", s.Protocol), nil
 	case "lz4":
 		return newLZ4Decoder(r), nil
+	case "zstd":
+		return newZstdDecoder(r), nil
 	}
-	return nil, fmt.Errorf("cannot receive %s-compressed data", s.Compress)
+	return nil, fmt.Errorf("BUG: unknown compressor %q", s.Compress)
 }

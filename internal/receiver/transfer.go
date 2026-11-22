@@ -1,6 +1,7 @@
 package receiver
 
 import (
+	"io"
 	"io/fs"
 	"os"
 
@@ -124,6 +125,14 @@ func (rt *Transfer) decoder() (rsynctoken.Decoder, error) {
 		rt.dec = dec
 	}
 	return rt.dec, nil
+}
+
+// closeDecoder stops what the decoder runs, if anything: zstd's decoder
+// has a goroutine of its own.
+func (rt *Transfer) closeDecoder() {
+	if c, ok := rt.dec.(io.Closer); ok {
+		c.Close()
+	}
 }
 
 // strong is the session's strong checksum (MD4 or MD5, seeded).

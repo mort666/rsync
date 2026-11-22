@@ -202,11 +202,7 @@ negotiate a faster checksum (xxh128).
 * xattrs (including acls), which rsync protocol 30 introduced, are not supported.
 * Incremental recursion (the `i` capability letter) is not supported, so
   large trees send their whole file list up front.
-* zstd-compressed data (`--zc=zstd`) can be sent but not received; `-z`
-  negotiates lz4 instead when gokrazy/rsync receives.
-* The `sha1` checksum, and the SHA-3 ones coming in rsync 4.0 (`sha3-256`,
-  `sha3-384`, `sha3-512`), are not offered. rsync never picks them unless
-  asked to, with `--checksum-choice` or `RSYNC_CHECKSUM_LIST`.
+* `--compress-threads` is not accepted: zstd compresses on one thread.
 
 ## Supported environments and privilege dropping
 

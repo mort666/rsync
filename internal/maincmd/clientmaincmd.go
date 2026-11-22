@@ -361,7 +361,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	if opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {
 		osenv.Logf("Client checksum: %s", rsyncchecksum.NewStrong(c.Session, 0).Name())
 	}
-	if err := rsynctoken.Negotiate(c, opts.CompressChoice(), opts.CompressLevel(), false, opts.Sender()); err != nil {
+	if err := rsynctoken.Negotiate(c, opts.CompressChoice(), opts.CompressLevel(), false); err != nil {
 		return nil, nil, err
 	}
 	if c.Session.Compress != "" && opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {

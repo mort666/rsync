@@ -326,7 +326,7 @@ func (s *Server) HandleDaemonConn(ctx context.Context, conn *Conn) (err error) {
 	if err == nil {
 		// Refuse what this server cannot do before the protocol starts,
 		// so the client hears why.
-		err = rsynctoken.CheckChoice(pc.Options.CompressChoice(), pc.Options.Sender())
+		err = rsynctoken.CheckChoice(pc.Options.CompressChoice())
 	}
 	if err != nil {
 		err = fmt.Errorf("parsing server args: %v", err)
@@ -499,7 +499,7 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 	if opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {
 		s.logger.Printf("Server checksum: %s", rsyncchecksum.NewStrong(c.Session, 0).Name())
 	}
-	if err := rsynctoken.Negotiate(c, opts.CompressChoice(), opts.CompressLevel(), true, opts.Sender()); err != nil {
+	if err := rsynctoken.Negotiate(c, opts.CompressChoice(), opts.CompressLevel(), true); err != nil {
 		return err
 	}
 	if c.Session.Compress != "" && opts.DebugGTE(rsyncopts.DEBUG_NSTR, 1) {

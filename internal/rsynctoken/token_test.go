@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gokrazy/rsync/internal/rsyncwire"
 	"github.com/klauspost/compress/zstd"
@@ -78,6 +80,9 @@ func newDecoder(t testing.TB, r io.Reader, algo string, proto int) Decoder {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if c, ok := d.(io.Closer); ok {
+		t.Cleanup(func() { c.Close() })
+	}
 	return d
 }
 
@@ -122,7 +127,7 @@ func cDecode(h, dir string, stream []byte, algo string, proto, blockLen int) ([]
 }
 
 // canDecode reports whether this package reads algo.
-func canDecode(algo string) bool { return slices.Contains(receiveNames, algo) }
+func canDecode(algo string) bool { return slices.Contains(Names, algo) }
 
 // levels for algo in the cross tests: lz4 has none.
 func levels(algo string) []int {
@@ -267,7 +272,7 @@ func TestNegativeControls(t *testing.T) {
 // splits into several TOKENRUN records.
 func TestLongTokenRun(t *testing.T) {
 	c := GenLongRun(150_000, 16)
-	for _, algo := range receiveNames {
+	for _, algo := range Names {
 		stream := goEncode(t, c, algo, 31, 6)
 		if got, err := goDecode(t, stream, c, algo, 31); err != nil || !bytes.Equal(got, c.New) {
 			t.Fatalf("%v Go->Go: %v", algo, err)
@@ -298,13 +303,13 @@ func TestLongTokenRun(t *testing.T) {
 
 // TestMultipleFiles uses one encoder and one decoder for several files, as
 // a transfer does. Upstream starts each file's deflate stream afresh, so no
-// history may leak from one file into the next.
+// history may leak from one file into the next; zstd's stream runs on.
 func TestMultipleFiles(t *testing.T) {
 	var files []*Case
 	for i := range 6 {
 		files = append(files, GenCase(uint64(500+i), 64*1024+i*40*1024, []int{700, 2048, 100_000}[i%3]))
 	}
-	for _, algo := range receiveNames {
+	for _, algo := range Names {
 		var stream bytes.Buffer
 		e := newEncoder(t, &stream, algo, 31, 6)
 		var starts []int
@@ -318,9 +323,12 @@ func TestMultipleFiles(t *testing.T) {
 		d := newDecoder(t, bytes.NewReader(stream.Bytes()), algo, 31)
 		for i, c := range files {
 			// Each file's stream decodes on its own: nothing carried over.
-			own := stream.Bytes()[starts[i]:starts[i+1]]
-			if got, err := goDecode(t, own, c, algo, 31); err != nil || !bytes.Equal(got, c.New) {
-				t.Fatalf("%v file %d alone: %v", algo, i, err)
+			// Except zstd, which is one stream for the whole session.
+			if algo != "zstd" {
+				own := stream.Bytes()[starts[i]:starts[i+1]]
+				if got, err := goDecode(t, own, c, algo, 31); err != nil || !bytes.Equal(got, c.New) {
+					t.Fatalf("%v file %d alone: %v", algo, i, err)
+				}
 			}
 			got, err := Decode(d, c.Basis, c.BlockLen)
 			if err != nil || !bytes.Equal(got, c.New) {
@@ -339,7 +347,7 @@ func TestMultipleFiles(t *testing.T) {
 func TestDecoderStopsAtEnd(t *testing.T) {
 	c := GenCase(77, 100*1024, 700)
 	trailer := []byte("the file's checksum")
-	for _, algo := range receiveNames {
+	for _, algo := range Names {
 		stream := append(goEncode(t, c, algo, 31, 6), trailer...)
 		r := bytes.NewReader(stream)
 		// No ReadByte: the decoder must add one without reading ahead.
@@ -449,7 +457,7 @@ func TestShortDictionary(t *testing.T) {
 // hang, and must report an error, not io.EOF, for truncated input.
 func FuzzDecode(f *testing.F) {
 	basis := GenCase(1, 4096, 64).Basis
-	for i, algo := range receiveNames {
+	for i, algo := range Names {
 		// Block indices in these refer to another basis; they are only
 		// starting points for the mutator.
 		f.Add(byte(i), goEncode(f, GenCase(3, 8*1024, 64), algo, 31, 6))
@@ -457,7 +465,7 @@ func FuzzDecode(f *testing.F) {
 	f.Add(byte(0), []byte{0x40, 0x05, 1, 2, 3, 4, 5, 0x81, 0xc3, 0xff, 0xff, 0x00})
 	f.Add(byte(1), []byte{0x21, 0xff, 0xff, 0xff, 0x7f, 0xff, 0xff})
 	f.Fuzz(func(t *testing.T, sel byte, stream []byte) {
-		algo := receiveNames[int(sel)%len(receiveNames)]
+		algo := Names[int(sel)%len(Names)]
 		proto := 30 + int(sel/8%2)
 		d := newDecoder(t, bytes.NewReader(stream), algo, proto)
 		count := (len(basis) + 63) / 64
@@ -494,7 +502,7 @@ func FuzzRoundTrip(f *testing.F) {
 		bl := 16 + int(blockLen)%20000
 		sz := 1 + int(size%(512*1024))
 		c := GenCase(seed, sz, bl)
-		algo := receiveNames[int(sel)%len(receiveNames)]
+		algo := Names[int(sel)%len(Names)]
 		proto := 30 + int(sel/8%2)
 		level := 1 + int(sel/16%9)
 		stream := goEncode(t, c, algo, proto, level)
@@ -538,7 +546,7 @@ func BenchmarkEncode(b *testing.B) {
 
 func BenchmarkDecode(b *testing.B) {
 	c := GenCase(9, 4<<20, 700)
-	for _, algo := range receiveNames {
+	for _, algo := range Names {
 		stream := goEncode(b, c, algo, 31, 6)
 		b.Run(algo, func(b *testing.B) {
 			b.SetBytes(int64(len(c.New)))
@@ -549,5 +557,32 @@ func BenchmarkDecode(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// Close stops the zstd decoder's goroutine, whether it is waiting for
+// input or holding output nobody asked for.
+func TestZstdDecoderClose(t *testing.T) {
+	c := GenCase(9, 300*1024, 700)
+	stream := goEncode(t, c, "zstd", 31, 3)
+	before := runtime.NumGoroutine()
+	for _, stop := range []int{1, 1 << 30} { // after one piece, after the file
+		d, err := NewDecoder(session("zstd", 31, 0), bytes.NewReader(stream))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < stop; i++ {
+			if _, _, err := d.Next(); err != nil {
+				break
+			}
+		}
+		d.(io.Closer).Close()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > before {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d goroutines, %d before: the decoder's goroutine did not stop", runtime.NumGoroutine(), before)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

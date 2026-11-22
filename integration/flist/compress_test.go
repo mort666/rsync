@@ -157,13 +157,6 @@ func TestCompressToGokrazy(t *testing.T) {
 				args = []string{"-z", "-r", "-I", "--stats"}
 			}
 			out, err := stock(t, append(args, src+"/", "rsync://localhost:"+ts.Port+"/interop/")...)
-			if c == "zstd" {
-				// gokrazy/rsync cannot receive zstd.
-				if err == nil || !strings.Contains(out, "cannot receive zstd") {
-					t.Fatalf("pushing zstd: %v, want an error that says gokrazy/rsync cannot receive it", err)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("%v", err)
 			}
@@ -173,8 +166,8 @@ func TestCompressToGokrazy(t *testing.T) {
 					t.Errorf("stock rsync sent %d bytes, want under %d: not compressed", got, zLimit)
 				}
 			}
-			if c == "-z" && len(cases) > 1 && !regexp.MustCompile(`negotiated compress: lz4|Client compress: zlib `).MatchString(out) {
-				t.Errorf("stock rsync did not negotiate lz4 with a gokrazy receiver")
+			if c == "-z" && len(cases) > 1 && !regexp.MustCompile(`negotiated compress: zstd|Client compress: zlib `).MatchString(out) {
+				t.Errorf("stock rsync did not negotiate zstd with a gokrazy receiver")
 			}
 		})
 	}
@@ -196,16 +189,10 @@ func TestCompressGokrazyClient(t *testing.T) {
 			src, dest, want := zTree(t)
 			addr, _ := startStockDaemonConf(t, src, "")
 			out, err := gokrazyPull(t, addr, "", dest, args...)
-			if c == "zstd" {
-				if err == nil || !strings.Contains(err.Error()+out, "cannot receive zstd") {
-					t.Errorf("pulling with zstd: %v, want an error that says gokrazy/rsync cannot receive it", err)
-				}
-			} else {
-				if err != nil {
-					t.Fatalf("pull: %v\n%s", err, out)
-				}
-				checkZTree(t, dest, want)
+			if err != nil {
+				t.Fatalf("pull: %v\n%s", err, out)
 			}
+			checkZTree(t, dest, want)
 
 			src, dest, want = zTree(t)
 			addr = startStockDaemonModule(t, dest, false)
@@ -237,10 +224,10 @@ func TestCompressProtocols(t *testing.T) {
 	})
 }
 
-// A gokrazy client against a gokrazy daemon, pulling and pushing. Neither
-// side receives zstd, so -z settles on lz4.
+// A gokrazy client against a gokrazy daemon, pulling and pushing. -z
+// settles on zstd, the first in both lists.
 func TestCompressGokrazyToGokrazy(t *testing.T) {
-	for _, c := range []string{"-z", "lz4", "zlibx", "zlib", "none"} {
+	for _, c := range []string{"-z", "zstd", "lz4", "zlibx", "zlib", "none"} {
 		t.Run(c, func(t *testing.T) {
 			args := []string{"-z", "-r", "-I", "--debug=nstr"}
 			if c != "-z" {
@@ -248,7 +235,7 @@ func TestCompressGokrazyToGokrazy(t *testing.T) {
 			}
 			wantName := c
 			if c == "-z" {
-				wantName = "lz4"
+				wantName = "zstd"
 			}
 
 			src, dest, want := zTree(t)
