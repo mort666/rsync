@@ -303,28 +303,45 @@ func TestTreeFromGokrazy(t *testing.T) {
 	})
 }
 
-// A gokrazy client pulls the tree from a stock daemon. It keeps -H to
-// itself, as it cannot create hard links, so the link arrives as a copy.
+// A gokrazy client pulls the tree from a stock daemon; with -H the link
+// arrives as a link.
 func TestTreeToGokrazy(t *testing.T) {
 	addr := startStockDaemon(t, makeTree(t))
 	protocols(t, func(t *testing.T, proto int) {
-		for _, args := range [][]string{{"-aD"}, {"-aDc"}, {"-aDH"}} {
-			t.Run(strings.Join(args, ""), func(t *testing.T) {
+		for _, tt := range []struct {
+			args      []string
+			hardLinks bool
+		}{
+			{[]string{"-aD"}, false},
+			{[]string{"-aDc"}, false},
+			{[]string{"-aDH"}, true},
+			{[]string{"-aDHc"}, true},
+		} {
+			t.Run(strings.Join(tt.args, ""), func(t *testing.T) {
 				dest := t.TempDir()
-				if out, err := gokrazyPull(t, addr, "", dest, append([]string{fmt.Sprintf("--protocol=%d", proto)}, args...)...); err != nil {
+				if out, err := gokrazyPull(t, addr, "", dest, append([]string{fmt.Sprintf("--protocol=%d", proto)}, tt.args...)...); err != nil {
 					t.Fatalf("%v\n%s", err, out)
 				}
-				checkTree(t, dest, false)
+				checkTree(t, dest, tt.hardLinks)
 			})
 		}
 	})
 }
 
-// Stock rsync pushes the tree to a gokrazy daemon. (It refuses -H.)
+// Stock rsync pushes the tree to a gokrazy daemon.
 func TestTreePushToGokrazy(t *testing.T) {
 	src := makeTree(t)
 	protocols(t, func(t *testing.T, proto int) {
-		for _, args := range [][]string{{"-aD"}, {"-aDc"}} {
+		for _, tt := range []struct {
+			args      []string
+			hardLinks bool
+		}{
+			{[]string{"-aD"}, false},
+			{[]string{"-aDc"}, false},
+			{[]string{"-aDH"}, true},
+			{[]string{"-aDHc"}, true},
+		} {
+			args := tt.args
 			t.Run(strings.Join(args, ""), func(t *testing.T) {
 				dest := t.TempDir()
 				ts := rsynctest.New(t, rsynctest.WritableInteropModule(dest))
@@ -332,7 +349,7 @@ func TestTreePushToGokrazy(t *testing.T) {
 				if out, err := stock(t, append(all, src+"/", "rsync://localhost:"+ts.Port+"/interop/")...); err != nil {
 					t.Fatalf("%v\n%s", err, out)
 				}
-				checkTree(t, dest, false)
+				checkTree(t, dest, tt.hardLinks)
 			})
 		}
 	})
