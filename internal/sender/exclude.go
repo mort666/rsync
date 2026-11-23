@@ -28,14 +28,15 @@ func (l *filterRuleList) addRule(fr *filterRule) {
 	l.Filters = append(l.Filters, fr)
 }
 
-// exclude.c:check_filter
+// exclude.c:check_filter: the first matching rule decides, and an
+// include rule means the name goes.
 func (l *filterRuleList) matches(name string) bool {
 	for _, fr := range l.Filters {
 		if fr.flag&filtruleReceiverOnly != 0 {
 			continue // a rule for the receiver side (e.g. protect)
 		}
 		if fr.matches(name) {
-			return true
+			return fr.flag&filtruleInclude == 0
 		}
 	}
 	return false
@@ -186,4 +187,29 @@ func parseFilter(line string) (*filterRule, error) {
 	rule.pattern = line
 
 	return rule, nil
+}
+
+// ReceiverRules is what a client's own rules protect from --delete when
+// it receives: every rule but sender-side ones (exclude.c:send_rules,
+// which keeps them local as well as sending them).
+func ReceiverRules(rules []string) func(name string) bool {
+	var l filterRuleList
+	for _, r := range rules {
+		if fr, err := parseFilterProto(30, r); err == nil {
+			l.addRule(fr)
+		}
+	}
+	return l.Excluded
+}
+
+// SenderRules are a sending client's own rules, for what it leaves out of
+// the file list (receiver-side ones are skipped there).
+func SenderRules(rules []string) *filterRuleList {
+	var l filterRuleList
+	for _, r := range rules {
+		if fr, err := parseFilterProto(30, r); err == nil {
+			l.addRule(fr)
+		}
+	}
+	return &l
 }

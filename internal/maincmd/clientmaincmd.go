@@ -457,7 +457,8 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			}
 		}
 
-		stats, err := st.Do(crd, cwr, rsync.FileSystemRoot, paths, nil)
+		// The client's own rules decide what it sends.
+		stats, err := st.Do(crd, cwr, rsync.FileSystemRoot, paths, sender.SenderRules(opts.FilterRules()))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -518,9 +519,11 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			InfoGTE:  opts.InfoGTE,
 			DebugGTE: opts.DebugGTE,
 		},
-		Dest:     paths[0],
-		Env:      osenv,
-		Conn:     c,
+		Dest: paths[0],
+		Env:  osenv,
+		Conn: c,
+		// The client's own rules protect what they exclude from --delete.
+		Excluded: sender.ReceiverRules(opts.FilterRules()),
 		Seed:     seed,
 		Progress: progress.NewPrinter(osenv.Stdout, time.Now),
 	}
