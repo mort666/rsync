@@ -73,7 +73,15 @@ func startStockDaemonModule(t *testing.T, dir string, readOnly bool) string {
 	addr := l.Addr().String()
 	_, port, _ := net.SplitHostPort(addr)
 	l.Close()
-	conf := filepath.Join(t.TempDir(), "rsyncd.conf")
+	// Not t.TempDir: under Cygwin (cwrsync) a connection's child process
+	// can outlive the killed daemon for a moment with d.log open, and
+	// Windows will not remove the folder until it exits.
+	confDir, err := os.MkdirTemp("", "stockd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { removeAllRetry(t, confDir) })
+	conf := filepath.Join(confDir, "rsyncd.conf")
 	cfg := fmt.Sprintf("use chroot = no\nport = %s\n", port)
 	if os.Getuid() == 0 {
 		// A daemon started as root runs transfers as nobody, which cannot
@@ -97,6 +105,19 @@ func startStockDaemonModule(t *testing.T, dir string, readOnly bool) string {
 	}
 	t.Fatal("stock rsync daemon did not come up")
 	return ""
+}
+
+// removeAllRetry removes dir, giving processes that still hold files in
+// it a few seconds to let go.
+func removeAllRetry(t *testing.T, dir string) {
+	t.Helper()
+	var err error
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if err = os.RemoveAll(dir); err == nil {
+			return
+		}
+	}
+	t.Errorf("removing %s: %v", dir, err)
 }
 
 // daemonList dry-runs "-n -d" against remotePath on the daemon at addr and
