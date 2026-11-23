@@ -4,6 +4,7 @@ package flist_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -140,12 +141,17 @@ func TestSelection(t *testing.T) {
 			for _, opt := range selectionArgs {
 				args := append([]string{"-rt"}, opt...)
 				t.Run(strings.Join(opt, " "), func(t *testing.T) {
+					if why := stockDiffers(t, opt); why != "" {
+						t.Skip(why)
+					}
 					// Some of these end with errors by design (a folder in
 					// the way without --force, the delete limit); only what
 					// they leave counts.
 					ref := t.TempDir()
 					prepareSelection(t, src, ref)
-					stock(t, append(args, src+"/", ref+"/")...)
+					if out, _ := stock(t, append(args, src+"/", ref+"/")...); strings.Contains(out, "unknown option") {
+						t.Skipf("this stock rsync does not know %v", opt)
+					}
 					dest := t.TempDir()
 					prepareSelection(t, src, dest)
 					out, err := dir.run(t, dest, args...)
@@ -157,6 +163,39 @@ func TestSelection(t *testing.T) {
 			}
 		})
 	}
+}
+
+// stockVersion is the version stock rsync reports, such as "3.1.3".
+func stockVersion(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command(rsynctest.TridgeOrGTFO(t, "asks stock rsync its version"), "--version").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := strings.Fields(string(out))
+	for i, w := range f {
+		if w == "version" && i+1 < len(f) {
+			return f[i+1]
+		}
+	}
+	t.Fatalf("no version in %q", out)
+	return ""
+}
+
+// stockDiffers says why the stock rsync under test cannot be the
+// reference for opt: older releases behave in ways gokrazy does not copy.
+func stockDiffers(t *testing.T, opt []string) string {
+	t.Helper()
+	for _, o := range opt {
+		switch {
+		case strings.HasPrefix(o, "--max-delete") && stockMaxProtocol(t) < 30:
+			// Before 3.0, 0 meant no limit and the count ran differently.
+			return "rsync before 3.0 counts --max-delete differently"
+		case strings.HasPrefix(o, "--modify-window") && strings.HasPrefix(stockVersion(t), "3.1."):
+			return "rsync 3.1 sets the times of files --modify-window calls the same"
+		}
+	}
+	return ""
 }
 
 // TestRemoveSourceFiles compares what --remove-source-files leaves on both

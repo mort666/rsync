@@ -2,10 +2,12 @@ package append_test
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gokrazy/rsync/internal/rsynctest"
 	"github.com/gokrazy/rsync/internal/testlogger"
@@ -40,6 +42,15 @@ func checkRedone(t *testing.T, destPath string, full []byte) {
 	}
 }
 
+// killOnClose is a connection to a local rsync process that kills the
+// process when closed.
+type killOnClose struct {
+	readWriter
+	cmd *exec.Cmd
+}
+
+func (k *killOnClose) Close() error { return k.cmd.Process.Kill() }
+
 // TestRedoFromSystemRsync has a gokrazy receiver pull from system rsync. It
 // used to stop the run at the first file that failed verification; rsync
 // asks for it again in the redo pass.
@@ -64,7 +75,13 @@ func TestRedoFromSystemRsync(t *testing.T) {
 	if err := rsync.Start(); err != nil {
 		t.Fatal(err)
 	}
-	res, err := client.Run(t.Context(), &readWriter{Reader: stdout, Writer: stdin}, []string{filepath.Dir(destPath)})
+	// Closing the connection stops rsync, so a client that fails, or a
+	// run past the deadline, ends the test instead of hanging on a read
+	// that will never return.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	conn := &killOnClose{readWriter: readWriter{Reader: stdout, Writer: stdin}, cmd: rsync}
+	res, err := client.Run(ctx, conn, []string{filepath.Dir(destPath)})
 	if err != nil {
 		rsync.Process.Kill()
 		rsync.Wait()
