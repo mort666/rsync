@@ -190,16 +190,35 @@ func parseFilter(line string) (*filterRule, error) {
 }
 
 // ReceiverRules is what a client's own rules protect from --delete when
-// it receives: every rule but sender-side ones (exclude.c:send_rules,
-// which keeps them local as well as sending them).
-func ReceiverRules(rules []string) func(name string) bool {
+// it receives: every rule but sender-side ones, or with --delete-excluded
+// only receiver-side ones (exclude.c:send_rules, which keeps those
+// local).
+func ReceiverRules(rules []string, deleteExcluded bool) func(name string) bool {
 	var l filterRuleList
 	for _, r := range rules {
-		if fr, err := parseFilterProto(30, r); err == nil {
-			l.addRule(fr)
+		fr, err := parseFilterProto(30, r)
+		if err != nil || deleteExcluded && fr.flag&filtruleReceiverOnly == 0 {
+			continue
 		}
+		l.addRule(fr)
 	}
 	return l.Excluded
+}
+
+// RulesForReceiver are the rules a sending client gives the receiver:
+// all of them, or with --delete-excluded only receiver-side ones, so that
+// it deletes what is excluded (exclude.c:send_rules).
+func RulesForReceiver(rules []string, deleteExcluded bool) []string {
+	if !deleteExcluded {
+		return rules
+	}
+	var out []string
+	for _, r := range rules {
+		if fr, err := parseFilterProto(30, r); err == nil && fr.flag&filtruleReceiverOnly != 0 {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // SenderRules are a sending client's own rules, for what it leaves out of

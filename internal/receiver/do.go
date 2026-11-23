@@ -32,19 +32,6 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 		rt.info("IO error encountered -- skipping file deletion\n")
 		return nil
 	}
-	// --max-delete: how many more entries may go, below 0 none.
-	limited, left, skipped := rt.Opts.MaxDelete != NoMaxDelete, int64(rt.Opts.MaxDelete), int64(0)
-	defer func() {
-		if skipped > 0 {
-			msg := fmt.Sprintf("Deletions stopped due to --max-delete limit (%d skipped)\n", skipped)
-			rt.Logger.Printf("%s", msg)
-			if rt.TellClient != nil {
-				rt.TellClient(rsyncwire.MsgWarning, msg)
-			} else if rt.Env != nil {
-				rt.Env.XferErrors.Add(1)
-			}
-		}
-	}()
 
 	// fs.WalkDir names paths with forward slashes; f.Name is a local path,
 	// with backslashes on Windows, where comparing the two as they are
@@ -67,14 +54,9 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 		}
 		counted := rt.delStats
 		rt.countDeleted(path, info)
-		if limited {
-			n := rt.delStats.Total() - counted.Total()
-			if n > max(left, 0) {
-				rt.delStats = counted
-				skipped += n
-				return
-			}
-			left -= n
+		if !rt.mayDelete(rt.delStats.Total() - counted.Total()) {
+			rt.delStats = counted
+			return
 		}
 		if rt.Opts.DryRun {
 			return
@@ -180,7 +162,13 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 	rt.defaultPerms = defaultPerms()
 	defer rt.closeDecoder()
 
-	if rt.Opts.DeleteMode {
+	rt.deleteLeft = int64(rt.Opts.MaxDelete)
+	defer rt.reportDeleteLimit()
+
+	// --delete-delay and --delete-after delete once the transfer is done;
+	// otherwise before it, which leaves what --delete-during leaves, as
+	// each folder's pass runs in the same order.
+	if rt.Opts.DeleteMode && !rt.Opts.DeleteAfter {
 		if err := rt.deleteFiles(fileList); err != nil {
 			return nil, err
 		}
@@ -189,6 +177,7 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 	if rt.Opts.PreserveHardlinks {
 		rt.hlinkLater = matchHardLinks(fileList)
 	}
+
 	if len(rt.Opts.BasisDirs) > 0 {
 		rt.openBasisDirs()
 		defer rt.closeBasisDirs()
@@ -213,6 +202,11 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 		return nil, err
 	}
 	rt.linkHardLinks(fileList)
+	if rt.Opts.DeleteMode && rt.Opts.DeleteAfter {
+		if err := rt.deleteFiles(fileList); err != nil {
+			return nil, err
+		}
+	}
 	if len(rt.retouchDirs) > 0 /* || rt.retouchDirTimes */ {
 		if err := rt.touchUpDirs(); err != nil {
 			return nil, err
@@ -318,4 +312,32 @@ func (rt *Transfer) report(c *rsyncwire.Conn) (*rsyncstats.TransferStats, error)
 		Written: written,
 		Size:    size,
 	}, nil
+}
+
+// mayDelete reports whether n more entries may go under --max-delete,
+// and counts them: as gone, or as skipped.
+func (rt *Transfer) mayDelete(n int64) bool {
+	if rt.Opts.MaxDelete == NoMaxDelete {
+		return true
+	}
+	if n > max(rt.deleteLeft, 0) {
+		rt.deleteSkipped += n
+		return false
+	}
+	rt.deleteLeft -= n
+	return true
+}
+
+// reportDeleteLimit says how many entries --max-delete kept.
+func (rt *Transfer) reportDeleteLimit() {
+	if rt.deleteSkipped == 0 {
+		return
+	}
+	msg := fmt.Sprintf("Deletions stopped due to --max-delete limit (%d skipped)\n", rt.deleteSkipped)
+	rt.Logger.Printf("%s", msg)
+	if rt.TellClient != nil {
+		rt.TellClient(rsyncwire.MsgWarning, msg)
+	} else if rt.Env != nil {
+		rt.Env.XferErrors.Add(1)
+	}
 }

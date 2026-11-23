@@ -454,7 +454,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		// wants the list (delete mode), so gate the write the same way to stay
 		// in sync with a stock rsync daemon.
 		if opts.ReceiverWantsFilterList(c.Session.Protocol) {
-			for _, rule := range opts.FilterRules() {
+			for _, rule := range sender.RulesForReceiver(opts.FilterRules(), opts.DeleteExcluded()) {
 				if err := c.WriteInt32(int32(len(rule))); err != nil {
 					return nil, nil, err
 				}
@@ -512,6 +512,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			MaxDelete:         opts.MaxDelete(),
 			NumericIds:        opts.NumericIds(),
 			RemoveSourceFiles: opts.RemoveSourceFiles(),
+			DeleteAfter:       opts.DeleteAfterTransfer(),
 			PreservePerms:     opts.PreservePerms(),
 			PreserveDevices:   opts.PreserveDevices(),
 			PreserveSpecials:  opts.PreserveSpecials(),
@@ -545,7 +546,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		Env:  osenv,
 		Conn: c,
 		// The client's own rules protect what they exclude from --delete.
-		Excluded: sender.ReceiverRules(opts.FilterRules()),
+		Excluded: sender.ReceiverRules(opts.FilterRules(), opts.DeleteExcluded()),
 		Seed:     seed,
 		Progress: progress.NewPrinter(osenv.Stdout, time.Now),
 	}

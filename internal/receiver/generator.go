@@ -659,12 +659,25 @@ func (rt *Transfer) skipInfo(msg string) {
 }
 
 // makeRoom removes what is at f's name for a file to take its place. A
-// folder goes only when empty, or with --force with what it holds; one
+// folder goes only when empty, or with --force or --delete with what it
+// holds; one
 // that is not empty is reported and f left alone, as rsync's delete_item
 // without DEL_RECURSE does. It reports whether there is room.
 func (rt *Transfer) makeRoom(f *File, st fs.FileInfo) (bool, error) {
+	// With --delete, rsync removes what is in the way with what it holds
+	// (del_opts with DEL_RECURSE), --force or not.
 	if st.IsDir() && rt.Opts.Force {
 		return true, rt.DestRoot.RemoveAll(f.Name)
+	}
+	if st.IsDir() && rt.Opts.DeleteMode {
+		saved := rt.delStats
+		rt.delStats = rsyncwire.DelStats{}
+		rt.countDeleted(filepath.ToSlash(f.Name), fs.FileInfoToDirEntry(st))
+		n := rt.delStats.Total()
+		rt.delStats = saved
+		if rt.mayDelete(n) {
+			return true, rt.DestRoot.RemoveAll(f.Name)
+		}
 	}
 	err := rt.DestRoot.Remove(f.Name)
 	if err == nil {

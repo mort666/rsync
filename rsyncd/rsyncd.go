@@ -649,6 +649,7 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			MaxDelete:         opts.MaxDelete(),
 			NumericIds:        opts.NumericIds(),
 			RemoveSourceFiles: opts.RemoveSourceFiles(),
+			DeleteAfter:       opts.DeleteAfterTransfer(),
 			PreservePerms:     opts.PreservePerms(),
 			PreserveDevices:   opts.PreserveDevices(),
 			PreserveSpecials:  opts.PreserveSpecials(),

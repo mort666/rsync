@@ -774,8 +774,15 @@ func (o *Options) DoFsync() bool    { return o.do_fsync != 0 }
 func (o *Options) Recurse() bool    { return o.recurse != 0 }
 func (o *Options) Verbose() bool    { return o.verbose != 0 }
 func (o *Options) DeleteMode() bool { return o.delete_mode != 0 }
-func (o *Options) Sender() bool     { return o.am_sender != 0 }
-func (o *Options) SetSender()       { o.am_sender = 1 }
+
+// When --delete deletes: before the transfer (--delete-before), as the
+// generator reaches each folder (--delete-during, rsync's default from
+// protocol 30), or after the transfer (--delete-delay, --delete-after).
+// DeleteExcluded is --delete-excluded.
+func (o *Options) DeleteAfterTransfer() bool { return o.delete_after != 0 || o.delete_during == 2 }
+func (o *Options) DeleteExcluded() bool      { return o.delete_excluded != 0 }
+func (o *Options) Sender() bool              { return o.am_sender != 0 }
+func (o *Options) SetSender()                { o.am_sender = 1 }
 func (o *Options) SetListOnly() {
 	o.list_only = 1
 	if o.recurse == 0 {
@@ -1117,13 +1124,13 @@ func (o *Options) gokrazyTable() []poptOption {
 		{"append", "", POPT_ARG_NONE, nil, OPT_APPEND},
 		{"append-verify", "", POPT_ARG_VAL, &o.append_mode, 2},
 		{"no-append", "", POPT_ARG_VAL, &o.append_mode, 0},
-		//{"del", "", POPT_ARG_NONE, &o.delete_during, 0},
+		{"del", "", POPT_ARG_NONE, &o.delete_during, 0},
 		{"delete", "", POPT_ARG_NONE, &o.delete_mode, 0},
-		//{"delete-before", "", POPT_ARG_NONE, &o.delete_before, 0},
-		//{"delete-during", "", POPT_ARG_VAL, &o.delete_during, 1},
-		//{"delete-delay", "", POPT_ARG_VAL, &o.delete_during, 2},
-		//{"delete-after", "", POPT_ARG_NONE, &o.delete_after, 0},
-		//{"delete-excluded", "", POPT_ARG_NONE, &o.delete_excluded, 0},
+		{"delete-before", "", POPT_ARG_NONE, &o.delete_before, 0},
+		{"delete-during", "", POPT_ARG_VAL, &o.delete_during, 1},
+		{"delete-delay", "", POPT_ARG_VAL, &o.delete_during, 2},
+		{"delete-after", "", POPT_ARG_NONE, &o.delete_after, 0},
+		{"delete-excluded", "", POPT_ARG_NONE, &o.delete_excluded, 0},
 		//{"delete-missing-args", "", POPT_BIT_SET, &o.missing_args, 2},
 		//{"ignore-missing-args", "", POPT_BIT_SET, &o.missing_args, 1},
 		{"remove-sent-files", "", POPT_ARG_VAL, &o.remove_source_files, 2}, /* deprecated */
@@ -1890,6 +1897,15 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 	}
 	if opts.am_root < 0 && !rsyncxattr.Supported {
 		return fmt.Errorf("--fake-super requires an rsync with extended attributes enabled")
+	}
+
+	// rsync/options.c: one --delete-WHEN, each implying --delete, as does
+	// --delete-excluded.
+	if opts.delete_before+min(opts.delete_during, 1)+opts.delete_after > 1 {
+		return fmt.Errorf("you may not combine multiple --delete-WHEN options")
+	}
+	if opts.delete_before != 0 || opts.delete_during != 0 || opts.delete_after != 0 || opts.delete_excluded != 0 {
+		opts.delete_mode = 1
 	}
 
 	// rsync/options.c: a munged link points into /rsyncd-munged/, which

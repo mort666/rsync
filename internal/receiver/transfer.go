@@ -75,9 +75,13 @@ type TransferOpts struct {
 	// RemoveSourceFiles tells the sender each file this side has
 	// (MSG_SUCCESS), so that it removes its copy.
 	RemoveSourceFiles bool
-	IgnoreTimes       bool
-	AlwaysChecksum    bool
-	WholeFile         bool
+
+	// DeleteAfter deletes once the transfer is done (--delete-delay,
+	// --delete-after) rather than before it.
+	DeleteAfter    bool
+	IgnoreTimes    bool
+	AlwaysChecksum bool
+	WholeFile      bool
 
 	// PreserveXattrs is how many -X were given (see
 	// rsyncopts.Options.PreserveXattrs).
@@ -175,11 +179,16 @@ type Transfer struct {
 	// basisRoots are the alternate folders, nil where one could not be
 	// opened (alt.go); altBasis records, for a file, the one the generator
 	// sent block sums of, which the receiver then reads.
-	basisRoots    []*os.Root
-	altBasis      sync.Map           // *File -> int
-	delStats      rsyncwire.DelStats // what --delete removed (see countDeleted)
-	touchedBlocks int64              // 4 KiB blocks written to files (protocol 33 MSG_BLOCK_STATS)
-	dec           rsynctoken.Decoder // see decoder
+	basisRoots []*os.Root
+
+	// deleteLeft is how many more entries --max-delete lets go;
+	// deleteSkipped how many it kept. The delete pass and the generator
+	// clearing a folder out of a file's way share them.
+	deleteLeft, deleteSkipped int64
+	altBasis                  sync.Map           // *File -> int
+	delStats                  rsyncwire.DelStats // what --delete removed (see countDeleted)
+	touchedBlocks             int64              // 4 KiB blocks written to files (protocol 33 MSG_BLOCK_STATS)
+	dec                       rsynctoken.Decoder // see decoder
 
 	// xattrCache holds the file list's xattr lists (-X). genXattr is the
 	// generator's finding for the file it is on, xattrFetched the values

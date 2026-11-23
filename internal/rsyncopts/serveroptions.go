@@ -207,10 +207,25 @@ func (o *Options) ServerOptions() []string {
 	// 	args[ac++] = arg;
 	// }
 
+	// When a receiving server deletes (options.c:server_options).
+	switch {
+	case !o.Sender():
+		if o.delete_mode != 0 && o.delete_excluded == 0 {
+			sargv = append(sargv, "--delete")
+		}
+	case o.delete_before != 0:
+		sargv = append(sargv, "--delete-before")
+	case o.delete_during == 2:
+		sargv = append(sargv, "--delete-delay")
+	case o.delete_during != 0:
+		sargv = append(sargv, "--delete-during")
+	case o.delete_after != 0:
+		sargv = append(sargv, "--delete-after")
+	case o.delete_mode != 0 && o.delete_excluded == 0:
+		sargv = append(sargv, "--delete")
+	}
 	if o.delete_excluded != 0 {
 		sargv = append(sargv, "--delete-excluded")
-	} else if o.delete_mode != 0 {
-		sargv = append(sargv, "--delete")
 	}
 
 	// if (size_only)
