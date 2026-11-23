@@ -62,7 +62,10 @@ func TestRedoFromSystemRsync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rsync := exec.Command(rsynctest.TridgeOrGTFO(t, "openrsync has no --append-verify"), client.ServerCommandOptions(srcPath)...)
+	// Stock rsync on Windows (msys2, Cygwin) splits names at "/" only: a
+	// path with backslashes would go into the file list whole, as the
+	// file's name.
+	rsync := exec.Command(rsynctest.TridgeOrGTFO(t, "openrsync has no --append-verify"), client.ServerCommandOptions(filepath.ToSlash(srcPath))...)
 	stdin, err := rsync.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
