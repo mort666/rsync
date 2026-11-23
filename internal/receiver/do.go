@@ -60,6 +60,11 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 				if rt.Opts.Verbose {
 					rt.Logger.Printf("  protecting %s (filter rule)", path)
 				}
+				if info.IsDir() {
+					// What an excluded folder holds is protected too:
+					// rsync does not go into it.
+					return fs.SkipDir
+				}
 				return nil
 			}
 			if rt.Opts.Verbose {
