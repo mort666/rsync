@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -162,8 +163,10 @@ func gokrazyRun(t *testing.T, addr, remotePath string, paths []string, extra []r
 // gokrazyRunResult is gokrazyRun, also returning the client's result.
 func gokrazyRunResult(t *testing.T, addr, remotePath string, paths []string, extra []rsyncclient.Option, args ...string) (*rsyncclient.Result, string, error) {
 	t.Helper()
-	var log bytes.Buffer
-	opts := append([]rsyncclient.Option{rsyncclient.WithStdout(io.Discard), rsyncclient.WithStderr(rsynctest.NopClose(io.MultiWriter(&log, testlogger.New(t)))), rsyncclient.DontRestrict()}, extra...)
+	// The log is stdout and stderr, as a terminal shows them: names and
+	// "deleting" lines go to stdout, as rsync's do.
+	var log lockedBuffer
+	opts := append([]rsyncclient.Option{rsyncclient.WithStdout(&log), rsyncclient.WithStderr(rsynctest.NopClose(io.MultiWriter(&log, testlogger.New(t)))), rsyncclient.DontRestrict()}, extra...)
 	client, err := rsyncclient.New(args, opts...)
 	if err != nil {
 		t.Fatal(err)
@@ -353,4 +356,22 @@ func TestTreePushToGokrazy(t *testing.T) {
 			})
 		}
 	})
+}
+
+// lockedBuffer is a bytes.Buffer that two writers can share.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

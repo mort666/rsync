@@ -3,6 +3,7 @@
 package receiver
 
 import (
+	"github.com/gokrazy/rsync"
 	"io/fs"
 	"os"
 	"os/user"
@@ -75,4 +76,21 @@ func (rt *Transfer) ownerDiffers(f *File, st fs.FileInfo) bool {
 		return true
 	}
 	return rt.Opts.PreserveGid && (rt.amRoot() || inGroup[uint32(f.Gid)]) && stt.Gid != uint32(f.Gid)
+}
+
+// ownerFlags are ITEM_REPORT_OWNER and ITEM_REPORT_GROUP for what this
+// receiver would change of st's owner and group (generator.c:itemize).
+func (rt *Transfer) ownerFlags(f *File, st fs.FileInfo) uint32 {
+	stt, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0
+	}
+	var iflags uint32
+	if rt.Opts.PreserveUid && rt.amRoot() && stt.Uid != uint32(f.Uid) {
+		iflags |= rsync.ITEM_REPORT_OWNER
+	}
+	if rt.Opts.PreserveGid && (rt.amRoot() || inGroup[uint32(f.Gid)]) && stt.Gid != uint32(f.Gid) {
+		iflags |= rsync.ITEM_REPORT_GROUP
+	}
+	return iflags
 }

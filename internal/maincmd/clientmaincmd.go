@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/gokrazy/rsync/internal/outformat"
 	"io"
 	"os"
 	"os/exec"
@@ -321,6 +322,26 @@ func clientTrace(osenv *rsyncos.Env, opts *rsyncopts.Options) *rsyncwire.Trace {
 func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options, conn io.ReadWriteCloser, paths []string, remoteProtocol int32, hooks ClientHooks) (*rsyncstats.TransferStats, []rsync.FileInfo, error) {
 	conn, stop := rsyncwire.WrapCtx(ctx, conn)
 	defer stop()
+	if name := opts.LogFile(); name != "" && osenv.LogFile == nil {
+		// A library caller's --log-file; the command line opens it
+		// earlier, before the sandbox.
+		f, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to open log-file %s: %v", name, err)
+		}
+		defer f.Close()
+		osenv.LogFile = f
+		defer func() { osenv.LogFile = nil }()
+	}
+	if n := opts.IOTimeoutSeconds(); n > 0 {
+		idle := rsyncwire.NewIdleTimeout(n, conn)
+		defer idle.Stop()
+		conn = struct {
+			io.Reader
+			io.Writer
+			io.Closer
+		}{idle.Reader(conn), idle.Writer(conn), conn}
+	}
 	trace := clientTrace(osenv, opts)
 	conn = trace.Wrap(conn)
 	crd := &rsyncwire.CountingReader{R: conn}
@@ -398,9 +419,11 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	}
 	c.Reader = crd
 
-	// From protocol 30 the client multiplexes its output too
-	// (need_messages_from_generator), from right after the seed.
-	if c.Session.Protocol >= 30 {
+	// From protocol 30 the client multiplexes its output too, from right
+	// after the seed. Below 30 only a receiving client does, and only with
+	// --remove-source-files, for MSG_SUCCESS (main.c:client_run,
+	// need_messages_from_generator); a sending client never does.
+	if c.Session.Protocol >= 30 || (opts.RemoveSourceFiles() && !opts.Sender()) {
 		mpx := &rsyncwire.MultiplexWriter{Writer: cwr, Trace: trace}
 		cwr = &rsyncwire.CountingWriter{W: mpx, BytesWritten: cwr.BytesWritten}
 		c.Writer = cwr
@@ -417,6 +440,16 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			Progress: progress.NewPrinter(osenv.Stdout, time.Now),
 			Only:     hooks.SendOnly,
 			OnSend:   hooks.OnSend,
+			Out:      newOut(opts, osenv, true, 0),
+		}
+		st.Out.Logf("building file list")
+		// What the server deleted comes back for printing (MSG_DELETED).
+		osenv.Deleted = func(name string, dir bool) {
+			mode := uint32(rsync.S_IFREG)
+			if dir {
+				mode = rsync.S_IFDIR
+			}
+			st.Out.LogDelete(name, mode)
 		}
 		if opts.Verbose() {
 			osenv.Logf("sender(paths=%q)", paths)
@@ -444,7 +477,7 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		// wants the list (delete mode), so gate the write the same way to stay
 		// in sync with a stock rsync daemon.
 		if opts.ReceiverWantsFilterList(c.Session.Protocol) {
-			for _, rule := range opts.FilterRules() {
+			for _, rule := range sender.RulesForReceiver(opts.FilterRules(), opts.DeleteExcluded()) {
 				if err := c.WriteInt32(int32(len(rule))); err != nil {
 					return nil, nil, err
 				}
@@ -490,6 +523,20 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 			MungeLinks:        opts.MungeLinks(),
 			BasisDirs:         opts.BasisDirs(),
 			AltDest:           opts.AltDestType(),
+			ModifyWindow:      opts.ModifyWindow(),
+			SizeOnly:          opts.SizeOnly(),
+			IgnoreNonExisting: opts.IgnoreNonExisting(),
+			IgnoreExisting:    opts.IgnoreExisting(),
+			UpdateOnly:        opts.UpdateOnly(),
+			MaxSize:           opts.MaxSize(),
+			MinSize:           opts.MinSize(),
+			Force:             opts.Force(),
+			IgnoreErrors:      opts.IgnoreErrors(),
+			MaxDelete:         opts.MaxDelete(),
+			NumericIds:        opts.NumericIds(),
+			RemoveSourceFiles: opts.RemoveSourceFiles(),
+			DeleteAfter:       opts.DeleteAfterTransfer(),
+			DeleteBefore:      opts.DeleteBefore(),
 			PreservePerms:     opts.PreservePerms(),
 			PreserveDevices:   opts.PreserveDevices(),
 			PreserveSpecials:  opts.PreserveSpecials(),
@@ -523,10 +570,15 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		Env:  osenv,
 		Conn: c,
 		// The client's own rules protect what they exclude from --delete.
-		Excluded: sender.ReceiverRules(opts.FilterRules()),
+		Excluded: sender.ReceiverRules(opts.FilterRules(), opts.DeleteExcluded()),
 		Seed:     seed,
 		Progress: progress.NewPrinter(osenv.Stdout, time.Now),
+		Out:      newOut(opts, osenv, false, 0),
 	}
+	if rt.Dest != "" {
+		rt.Out.Logf("receiving file list")
+	}
+	rt.Opts.ItemizeAll = opts.StdoutFormatHasI() > 1 || opts.InfoGTE(rsyncopts.INFO_NAME, 2)
 	if opts.Verbose() {
 		osenv.Logf("receiving to dest=%s", rt.Dest)
 	}
@@ -601,7 +653,60 @@ func clientMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options
 	}
 	dest := remaining[len(remaining)-1]
 	sources := remaining[:len(remaining)-1]
-	return rsyncMain(ctx, osenv, opts, sources, dest)
+	if name := opts.LogFile(); name != "" && osenv.LogFile == nil {
+		// Opened before the sandbox, which would not let it be.
+		f, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open log-file %s: %v", name, err)
+		}
+		defer f.Close()
+		osenv.LogFile = f
+	}
+	stats, err := rsyncMain(ctx, osenv, opts, sources, dest)
+	if err == nil && stats != nil && osenv.LogFile != nil {
+		// What rsync logs at the end without -v (main.c:output_summary);
+		// a run that fails ends without it.
+		logf := (&outformat.Logger{LogFile: osenv.LogFile}).Logf
+		logf("sent %d bytes  received %d bytes  total size %d", stats.Written, stats.Read, stats.Size)
+	}
+	return stats, err
+}
+
+// newOut is the client's item output: the --out-format on stdout and the
+// --log-file (log.c).
+func newOut(opts *rsyncopts.Options, osenv *rsyncos.Env, sender bool, checksumLen int) *outformat.Logger {
+	op := "recv"
+	if sender {
+		op = "send"
+	}
+	l := &outformat.Logger{
+		Context: outformat.Context{
+			Op:                   op,
+			Sender:               sender,
+			PreserveUid:          opts.PreserveUid(),
+			PreserveGid:          opts.PreserveGid(),
+			PreserveMTimes:       opts.PreserveMTimes(),
+			ReceiverSymlinkTimes: true,
+			ChecksumLen:          checksumLen,
+		},
+		DryRun:       opts.DryRun(),
+		LogBefore:    opts.LogBeforeTransfer(),
+		Progress:     opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) && !opts.InfoGTE(rsyncopts.INFO_PROGRESS, 2),
+		Stdout:       osenv.Stdout,
+		StdoutFormat: opts.StdoutFormat(),
+		StdoutHasI:   opts.StdoutFormatHasI(),
+		StdoutHasOI:  opts.StdoutFormatHasOorI(),
+		InfoDel:      opts.InfoGTE(rsyncopts.INFO_DEL, 1),
+	}
+	for lvl := uint16(1); lvl <= 2 && opts.InfoGTE(rsyncopts.INFO_NAME, lvl); lvl++ {
+		l.InfoName = int(lvl)
+	}
+	if osenv.LogFile != nil {
+		l.LogFile = osenv.LogFile
+		l.LogFileFormat = opts.LogFileFormat()
+		l.LogFileHasI = opts.LogFileFormatHasI()
+	}
+	return l
 }
 
 // linkReadDirs is what a sender may read: its sources, or with -L, -k or

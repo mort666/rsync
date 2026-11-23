@@ -463,10 +463,21 @@ func (s *Server) HandleConnArgs(ctx context.Context, conn *Conn, module *Module,
 // remoteProtocol is the version from the client's daemon greeting. When it is
 // 0, both sides exchange versions on conn first, as over a remote shell.
 func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc *rsyncopts.Context, remoteProtocol int32) (err error) {
-	rd := conn.rd
+	var rd io.Reader = conn.rd
 	crd := conn.crd
 	cwr := conn.cwr
 	opts := pc.Options
+	if n := opts.IOTimeoutSeconds(); n > 0 {
+		// The client's --timeout (rsync's daemon "timeout" setting is not
+		// supported).
+		idle := rsyncwire.NewIdleTimeout(n, conn.closer)
+		defer idle.Stop()
+		rd = idle.Reader(rd)
+		cwr.W = struct {
+			io.Writer
+			io.Closer
+		}{idle.Writer(cwr.W), cwr.W}
+	}
 	paths := pc.RemainingArgs[1:]
 	trace := s.traceConn(conn, opts.DebugLevel(rsyncopts.DEBUG_IO))
 
@@ -547,9 +558,11 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 	// shared by the transfer.
 	env := &rsyncos.Env{Stderr: s.stderr}
 
-	// From protocol 30 the client multiplexes its output as well
-	// (main.c:start_server, need_messages_from_generator).
-	if c.Session.Protocol >= 30 {
+	// From protocol 30 the client multiplexes its output as well. Below 30
+	// only a receiving client does, with --remove-source-files
+	// (main.c:start_server, need_messages_from_generator, and
+	// do_server_recv, which reads plain input below 30).
+	if c.Session.Protocol >= 30 || (opts.RemoveSourceFiles() && opts.Sender()) {
 		mrd := &rsyncwire.MultiplexReader{Env: env, Reader: rd, Trace: trace, Protocol: c.Session.Protocol}
 		c.Reader = struct {
 			io.Reader
@@ -567,6 +580,11 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 				mpx.WriteMsg(rsyncwire.MsgErrorXfer, fmt.Appendf(nil, "gokr-rsync [sender]: %v\n", err))
 			}
 		}()
+		if opts.RemoveSourceFiles() && module != nil && !module.Writable {
+			// main.c: removing the sources needs a module the client may
+			// write.
+			return fmt.Errorf("ERROR: --remove-source-files cannot be used with a read-only module")
+		}
 
 		return s.handleConnSender(module, crd, cwr, paths, opts, c, sessionChecksumSeed, mpx, env)
 	}
@@ -620,6 +638,20 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			MungeLinks:        opts.MungeLinks(),
 			BasisDirs:         opts.BasisDirs(),
 			AltDest:           opts.AltDestType(),
+			ModifyWindow:      opts.ModifyWindow(),
+			SizeOnly:          opts.SizeOnly(),
+			IgnoreNonExisting: opts.IgnoreNonExisting(),
+			IgnoreExisting:    opts.IgnoreExisting(),
+			UpdateOnly:        opts.UpdateOnly(),
+			MaxSize:           opts.MaxSize(),
+			MinSize:           opts.MinSize(),
+			Force:             opts.Force(),
+			IgnoreErrors:      opts.IgnoreErrors(),
+			MaxDelete:         opts.MaxDelete(),
+			NumericIds:        opts.NumericIds(),
+			RemoveSourceFiles: opts.RemoveSourceFiles(),
+			DeleteAfter:       opts.DeleteAfterTransfer(),
+			DeleteBefore:      opts.DeleteBefore(),
 			PreservePerms:     opts.PreservePerms(),
 			PreserveDevices:   opts.PreserveDevices(),
 			PreserveSpecials:  opts.PreserveSpecials(),
@@ -655,6 +687,8 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			mpx.WriteMsg(tag, []byte(msg))
 		},
 	}
+	rt.Opts.ItemizeAll = opts.StdoutFormatHasI() > 1 || opts.InfoGTE(rsyncopts.INFO_NAME, 2)
+	rt.Opts.ReportDeletes = opts.InfoGTE(rsyncopts.INFO_DEL, 1) || opts.StdoutFormat() != ""
 	if err := os.MkdirAll(rt.Dest, 0755); err != nil {
 		return fmt.Errorf("MkdirAll(dest=%s): %v", rt.Dest, err)
 	}

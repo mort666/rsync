@@ -71,8 +71,10 @@ build_master() {
   # configure.sh and config.h.in share one Makefile rule, which make -j
   # runs twice at once when configure.ac is newer: the two runs collide
   # ("cp: cannot create regular file 'configure.sh.old'"). Settle them
-  # first, on their own.
-  make conf
+  # first, on their own. When that regenerates configure.sh (a cached
+  # tree pulled past a configure.ac change), make stops and asks for
+  # "make reconfigure", which reruns configure with the new script.
+  make conf || make reconfigure
   make -j"$jobs" rsync
   mkdir -p "$out/bin"
   cp rsync "$out/bin/rsync"

@@ -16,6 +16,10 @@ type Env struct {
 
 	DontRestrict bool
 
+	// LogFile is the --log-file, opened before any sandboxing; nil for
+	// none.
+	LogFile io.Writer
+
 	// DialContext, when set, replaces the default TCP dialer used to reach an
 	// rsync:// daemon. Lets callers meter or route the connection.
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -37,6 +41,14 @@ type Env struct {
 	// BlockStats is how many 4 KiB blocks a server receiver says it wrote
 	// (MSG_BLOCK_STATS, protocol 33+), for a sending client's stats.
 	BlockStats atomic.Int64
+
+	// SourceDone, when set, is told each file-list index the receiver
+	// reports done (MSG_SUCCESS), for --remove-source-files.
+	SourceDone func(ndx int32)
+
+	// Deleted, when set, is told each name a server receiver deleted
+	// (MSG_DELETED); otherwise it is logged.
+	Deleted func(name string, dir bool)
 
 	logger log.Logger
 }

@@ -1,6 +1,7 @@
 package receiver_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -57,13 +58,18 @@ func TestReceiverListing(t *testing.T) {
 	stdout, _ := rsynctest.Output(t, "gokr-rsync",
 		"-aH",
 		"rsync://localhost:"+srv.Port+"/interop/")
-	want := `drwxr-xr-x        4096 2009/11/10 23:00:00 .
+	// A folder's size is the file system's: 4096 on ext4, less on tmpfs.
+	st, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf(`drwxr-xr-x %11d 2009/11/10 23:00:00 .
 -rw-r--r--           5 2009/11/10 23:00:00 hello
-`
+`, st.Size())
 	if runtime.GOOS == "windows" {
-		want = `drwxrwxrwx        4096 2009/11/10 23:00:00 .
+		want = fmt.Sprintf(`drwxrwxrwx %11d 2009/11/10 23:00:00 .
 -rw-rw-rw-           5 2009/11/10 23:00:00 hello
-`
+`, st.Size())
 	}
 	if diff := cmp.Diff(want, string(stdout)); diff != "" {
 		t.Fatalf("unexpected listing: diff (-want +got):\n%s", diff)

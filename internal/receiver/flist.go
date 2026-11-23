@@ -489,7 +489,9 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 
 	sortFileList(rt.Conn.Session.Protocol, fileList)
 
-	if rt.Opts.PreserveUid || rt.Opts.PreserveGid {
+	// With --numeric-ids no name lists come, and ids stay as sent
+	// (uidlist.c:recv_id_list).
+	if (rt.Opts.PreserveUid || rt.Opts.PreserveGid) && !rt.Opts.NumericIds {
 		// receive the uid/gid list
 		users, groups, err := rt.RecvIdList()
 		if err != nil {
@@ -497,6 +499,17 @@ func (rt *Transfer) ReceiveFileList() ([]*File, error) {
 		}
 		rt.Users = users
 		rt.Groups = groups
+		// Map the sender's ids to this side's by name: the owner as root
+		// only, the group always (uidlist.c:recv_id_list, match_uid,
+		// match_gid).
+		for _, f := range fileList {
+			if m, ok := users[f.Uid]; ok && rt.Opts.PreserveUid && rt.amRoot() {
+				f.Uid = m.LocalId
+			}
+			if m, ok := groups[f.Gid]; ok && rt.Opts.PreserveGid {
+				f.Gid = m.LocalId
+			}
+		}
 	}
 
 	// read the i/o error flag: below protocol 30 after the lists. From 30

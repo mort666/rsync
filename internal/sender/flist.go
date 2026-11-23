@@ -109,6 +109,10 @@ type scopedWalker struct {
 	parent    *scopedWalker
 	linkDepth int
 	current   string
+
+	// fsDev is the device of the walk's top, which -x keeps it to.
+	fsDev   int64
+	fsDevOK bool
 }
 
 func (s *scopedWalker) walk() error {
@@ -162,6 +166,11 @@ func (s *scopedWalker) walk() error {
 		}
 		if info.Mode()&fs.ModeSymlink != 0 && s.st.Opts.PreserveLinks() {
 			return s.walkFn(root, fs.FileInfoToDirEntry(info), nil)
+		}
+	}
+	if s.st.Opts.OneFileSystem() > 0 {
+		if info, err := fs.Stat(s.source.FS(), root); err == nil {
+			s.fsDev, _, _, s.fsDevOK = hardLinkID(info)
 		}
 	}
 	if err := fs.WalkDir(s.source.FS(), root, s.walkFn); err != nil {
@@ -254,6 +263,22 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		return nil // SkipDir on a file would skip the rest of its folder
 	}
 
+	// -x: a folder another file system is mounted on goes without its
+	// contents, and with -xx not at all (flist.c:make_file,
+	// FLAG_MOUNT_DIR).
+	mountDir := false
+	if opts.OneFileSystem() > 0 && d.IsDir() && path != "." && s.fsDevOK {
+		if dev, _, _, ok := hardLinkID(info); ok && dev != s.fsDev {
+			if opts.OneFileSystem() > 1 {
+				if opts.InfoGTE(rsyncopts.INFO_MOUNT, 1) {
+					logger.Printf("[sender] skipping mount-point dir %s", name)
+				}
+				return filepath.SkipDir
+			}
+			mountDir = true
+		}
+	}
+
 	s.fileList.Files = append(s.fileList.Files, file{
 		source:  s.source,
 		path:    path,
@@ -261,6 +286,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		isDir:   info.IsDir(),
 		Wpath:   name,
 		Length:  info.Size(),
+		ModTime: info.ModTime(),
 		xattrs:  -1,
 	})
 
@@ -315,6 +341,9 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		mode |= rsync.S_IFSOCK
 		isSpecial = true
 	}
+	// The entry keeps what an output line shows of it (%i, %n, %B).
+	entry := len(s.fileList.Files) - 1
+	s.fileList.Files[entry].Mode = mode
 
 	// From protocol 28 a device number goes as major and minor, the minor
 	// in one byte when it fits.
@@ -408,16 +437,14 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	}
 
 	// 5.   file length (long)
+	// A folder's size is what the file system says, as rsync sends it
+	// (%l shows it, and it counts in the total size).
 	size := info.Size()
-	if info.Mode().IsDir() {
-		// tmpfs returns non-4K sizes for directories. Override with
-		// 4096 to make the tests succeed regardless of the /tmp file
-		// system type.
-		size = 4096
-	}
 	s.fec.WriteVarlong30(proto, size, 3)
 
-	s.fileList.TotalSize += size
+	if info.Mode().IsRegular() || info.Mode()&fs.ModeSymlink != 0 {
+		s.fileList.TotalSize += size // as rsync counts it (flist.c)
+	}
 
 	// 6.   file modification time (optional, integer; from protocol 30 a
 	//      varlong, which does not run out in 2038)
@@ -456,6 +483,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		}
 		// 8.   if -o, the user id (integer; from protocol 30 a varint)
 		s.fec.WriteVarint30(proto, uid)
+		s.fileList.Files[entry].Uid = uid
 	}
 
 	if opts.PreserveGid() {
@@ -474,6 +502,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		}
 		// 9.   if -g, the group id (integer; from protocol 30 a varint)
 		s.fec.WriteVarint30(proto, gid)
+		s.fileList.Files[entry].Gid = gid
 	}
 
 	if sendRdev {
@@ -508,6 +537,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 			return err // TODO
 		}
 		target = mungedTarget(opts, target)
+		s.fileList.Files[entry].LinkTarget = target
 		s.fec.WriteVarint30(proto, int32(len(target)))
 		s.fec.WriteString(target)
 	}
@@ -571,6 +601,9 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	// only entry sent as ".". Any other folder goes as an entry only.
 	// (rsync flist.c send_file_list: SLASH_ENDING_NAME, DOTDIR_NAME.)
 	if d.IsDir() && !opts.Recurse() && name != "." {
+		return filepath.SkipDir
+	}
+	if mountDir {
 		return filepath.SkipDir
 	}
 
@@ -704,7 +737,8 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 	}
 
 	const endOfSet = 0
-	if st.Opts.PreserveUid() {
+	// With --numeric-ids no name lists go at all (flist.c:send_file_list).
+	if st.Opts.PreserveUid() && !st.Opts.NumericIds() {
 		for uid, name := range uidMap {
 			fec.WriteVarint30(proto, uid)
 			fec.WriteByte(byte(len(name)))
@@ -712,7 +746,7 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 		}
 		fec.WriteVarint30(proto, endOfSet)
 	}
-	if st.Opts.PreserveGid() {
+	if st.Opts.PreserveGid() && !st.Opts.NumericIds() {
 		for gid, name := range gidMap {
 			fec.WriteVarint30(proto, gid)
 			fec.WriteByte(byte(len(name)))

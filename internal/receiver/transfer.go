@@ -1,10 +1,13 @@
 package receiver
 
 import (
+	"github.com/gokrazy/rsync/internal/outformat"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/gokrazy/rsync/internal/log"
 	"github.com/gokrazy/rsync/internal/progress"
@@ -43,8 +46,41 @@ type TransferOpts struct {
 
 	// BasisDirs are the alternate folders of --compare-dest, --copy-dest
 	// or --link-dest, which AltDest names (rsyncopts.CompareDest, ...).
-	BasisDirs      []string
-	AltDest        int
+	BasisDirs []string
+	AltDest   int
+
+	// ModifyWindow is --modify-window (see modTimeEqual).
+	ModifyWindow int
+
+	// Which files the generator leaves alone: --size-only compares sizes
+	// alone, --existing skips what the destination lacks,
+	// --ignore-existing what it has, -u what is newer there, and
+	// --max-size and --min-size (-1 for none) regular files by size.
+	SizeOnly          bool
+	IgnoreNonExisting bool
+	IgnoreExisting    bool
+	UpdateOnly        bool
+	MaxSize           int64
+	MinSize           int64
+
+	// Force removes a folder that is in a file's way with what it holds
+	// (--force). IgnoreErrors deletes despite I/O errors on the sending
+	// side (--ignore-errors). MaxDelete caps deletions (--max-delete),
+	// NoMaxDelete for none.
+	Force        bool
+	IgnoreErrors bool
+	MaxDelete    int
+
+	// NumericIds is --numeric-ids: no name lists, ids as sent.
+	NumericIds bool
+
+	// RemoveSourceFiles tells the sender each file this side has
+	// (MSG_SUCCESS), so that it removes its copy.
+	RemoveSourceFiles bool
+
+	// DeleteAfter deletes once the transfer is done (--delete-delay,
+	// --delete-after) rather than before it.
+	DeleteAfter    bool
 	IgnoreTimes    bool
 	AlwaysChecksum bool
 	WholeFile      bool
@@ -67,6 +103,16 @@ type TransferOpts struct {
 	// OmitDirTimes leaves the times of folders alone (--omit-dir-times),
 	// with PreserveTimes too.
 	OmitDirTimes bool
+
+	// ItemizeAll reports unchanged items too (-ii, or --info=name2).
+	ItemizeAll bool
+
+	// ReportDeletes has a server tell its client of each deleted name
+	// (--info=del, or an --out-format, as -v and -i give).
+	ReportDeletes bool
+
+	// DeleteBefore is an explicit --delete-before.
+	DeleteBefore bool
 
 	Inplace     bool
 	KeepPartial bool
@@ -129,6 +175,10 @@ type Transfer struct {
 	// it; a client counts the error in Env.XferErrors instead.
 	TellClient func(tag uint8, msg string)
 
+	// Out prints items with the --out-format and to the --log-file; nil
+	// prints nothing.
+	Out *outformat.Logger
+
 	// state
 	Conn         *rsyncwire.Conn
 	Seed         int32
@@ -145,7 +195,31 @@ type Transfer struct {
 	// basisRoots are the alternate folders, nil where one could not be
 	// opened (alt.go); altBasis records, for a file, the one the generator
 	// sent block sums of, which the receiver then reads.
-	basisRoots    []*os.Root
+	basisRoots []*os.Root
+
+	// deleteLeft is how many more entries --max-delete lets go;
+	// deleteSkipped how many it kept. The delete pass and the generator
+	// clearing a folder out of a file's way share them.
+	deleteLeft, deleteSkipped int64
+
+	// preDeleteTimes are the folders' times from before the delete pass
+	// (see deleteDuring), by slash-separated name.
+	preDeleteTimes map[string]time.Time
+
+	// redo carries the files that failed verification from the receiver
+	// to the generator, which asks for them again in phase 1, the redo
+	// pass (io.c MSG_REDO); the receiver closes it on reaching phase 1
+	// (MSG_DONE). nil when no generator runs. genRedoing is set while
+	// the generator asks for them, recvRedoing once the receiver is in
+	// phase 1; each is touched by its own goroutine only.
+	redo chan int
+
+	// recvMsgs are the receiver's messages for the client, which the
+	// generator sends (see tell).
+	recvMsgsMu    sync.Mutex
+	recvMsgs      []recvMsg
+	genRedoing    bool
+	recvRedoing   bool
 	altBasis      sync.Map           // *File -> int
 	delStats      rsyncwire.DelStats // what --delete removed (see countDeleted)
 	touchedBlocks int64              // 4 KiB blocks written to files (protocol 33 MSG_BLOCK_STATS)
@@ -193,3 +267,6 @@ func (rt *Transfer) closeDecoder() {
 func (rt *Transfer) strong() rsyncchecksum.Strong {
 	return rsyncchecksum.NewStrong(rt.Conn.Session, rt.Seed)
 }
+
+// NoMaxDelete is TransferOpts.MaxDelete without --max-delete.
+const NoMaxDelete = math.MinInt32

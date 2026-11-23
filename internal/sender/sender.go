@@ -3,6 +3,7 @@ package sender
 import (
 	"errors"
 	"fmt"
+	"github.com/gokrazy/rsync/internal/outformat"
 	"io"
 	"os"
 	"sort"
@@ -60,6 +61,7 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		// to report on (rsync's itemize). There is nothing to send but the
 		// attributes back, and any xattr values it asked for.
 		if !attrs.Transfer() {
+			st.Out.MaybeLogItem(st.item(fl, attrs))
 			if err := st.writeNdxAndAttrs(fileIndex, fl, attrs); err != nil {
 				return err
 			}
@@ -74,6 +76,7 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 		st.attrs = attrs
 
 		if st.Opts.DryRun() {
+			st.Out.LogItem(outformat.Client, st.item(fl, attrs))
 			if err := st.writeNdxAndAttrs(fileIndex, fl, attrs); err != nil {
 				return err
 			}
@@ -137,6 +140,11 @@ func (st *Transfer) SendFiles(fileList *fileList) error {
 			err = st.sendFile(fileIndex, fl)
 		default:
 			err = st.hashSearch(targets, tagTable, head, fileIndex, fl)
+		}
+		if err == nil {
+			it := st.item(fl, attrs)
+			it.Bytes = st.bytesWritten() - st.itemStart
+			st.Out.After(it)
 		}
 		if err != nil {
 			if _, ok := err.(*os.PathError); ok {
@@ -239,11 +247,8 @@ func (st *Transfer) receiveSumsForPhase(appendShortcut bool) (rsync.SumHead, err
 // begin tells of a file the sender opened to send: its path on stdout, with
 // --progress, and its name to OnSend.
 func (st *Transfer) begin(fl file) {
-	if !st.Opts.Server() &&
-		st.Opts.InfoGTE(rsyncopts.INFO_NAME, 1) &&
-		st.Opts.InfoGTE(rsyncopts.INFO_PROGRESS, 1) {
-		fmt.Fprintln(st.Env.Stdout, fl.path)
-	}
+	st.itemStart = st.bytesWritten()
+	st.Out.Before(st.item(fl, st.attrs), fl.Wpath)
 	if st.OnSend != nil && !st.redo {
 		st.OnSend(fl.Wpath)
 	}
