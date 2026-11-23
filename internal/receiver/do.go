@@ -196,11 +196,15 @@ func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsy
 	// Wait passes on no panic of these goroutines: a panic would end the
 	// program. Each one returns its own as an error, which closes the
 	// connection too.
+	// Each file goes into the redo pass at most once, so this never
+	// blocks the receiver.
+	rt.redo = make(chan int, len(fileList))
 	eg.Go(func() error { return closeOnErr(panicerr.Call(func() error { return rt.GenerateFiles(fileList) })) })
 	eg.Go(func() error { return closeOnErr(panicerr.Call(func() error { return rt.RecvFiles(fileList) })) })
 	if err := eg.Wait(); err != nil {
 		return nil, err
 	}
+	rt.flushRecvMsgs()
 	rt.linkHardLinks(fileList)
 	if rt.Opts.DeleteMode && rt.Opts.DeleteAfter {
 		if err := rt.deleteFiles(fileList); err != nil {

@@ -74,6 +74,8 @@ func (rt *Transfer) matchRegular(root *os.Root, f *File) (basisMatch, fs.FileInf
 		return basisContentDiffers, st
 	}
 	switch {
+	case rt.genRedoing:
+		return basisContentDiffers, st
 	case rt.Opts.AlwaysChecksum && !rt.Opts.SizeOnly:
 		sum, err := rt.strong().RootFileChecksum(root, f.Name)
 		if err != nil || !bytes.Equal(sum, f.Checksum) {

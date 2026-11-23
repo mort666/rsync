@@ -2,11 +2,13 @@ package receiver
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gokrazy/rsync"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
@@ -20,6 +22,16 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 		maxPhase = 2 // the --delay-updates pass
 	}
 	phase := 0
+	// Closing redo tells the generator the redo pass is complete; it must
+	// happen on the way out too, or a generator waiting on it would hang.
+	redoClosed := rt.redo == nil
+	closeRedo := func() {
+		if !redoClosed {
+			close(rt.redo)
+			redoClosed = true
+		}
+	}
+	defer closeRedo()
 	for {
 		idx, attrs, err := rt.Conn.ReadNdxAndAttrs(len(fileList))
 		if err != nil {
@@ -33,7 +45,12 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 			if rt.Opts.DebugGTE(rsyncopts.DEBUG_RECV, 1) {
 				rt.Logger.Printf("recvFiles phase=%d", phase)
 			}
-			// TODO: send done message
+			if phase == 1 {
+				// What comes now is the redo pass (receiver.c:recv_files
+				// redoing); the generator has every file to ask for again.
+				rt.recvRedoing = true
+				closeRedo()
+			}
 			continue
 		}
 		fetched, err := rt.readXattrValues(fileList[idx], attrs)
@@ -60,7 +77,12 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 			fmt.Fprintln(rt.Env.Stdout, fileList[idx].Name)
 		}
 		if err := rt.recvFile1(fileList[idx]); err != nil {
-			return err
+			var verr *verifyError
+			if !errors.As(err, &verr) {
+				return err
+			}
+			rt.verifyFailed(int(idx), verr)
+			continue
 		}
 		rt.fileDone(int(idx))
 	}
@@ -186,7 +208,9 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 
 	var buf [rsync.ChunkSize]byte
 	var offset int64
-	appended := rt.Opts.AppendMode > 0 && sh.ChecksumCount > 0
+	// The redo pass sends files whole or against their basis, never
+	// appended (receiver.c:recv_files turns append_mode off).
+	appended := rt.Opts.AppendMode > 0 && !rt.recvRedoing && sh.ChecksumCount > 0
 	if appended {
 		// Match rsync/receiver.c:receive_data — seek past the existing prefix
 		// and append the incoming literals after it. At this protocol level
@@ -286,14 +310,15 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_DELTASUM, 1) {
 			rt.Logger.Printf("append of %s accepted unverified", f.Name)
 		}
-	case appended:
+	default:
 		fate := "discarded"
-		if rt.Opts.Inplace || rt.Opts.KeepPartial {
+		switch {
+		case !rt.Opts.Inplace && rt.Opts.KeepPartial && rt.Opts.PartialDir != "":
+			fate = "put into partial-dir"
+		case rt.Opts.Inplace || rt.Opts.KeepPartial:
 			fate = "retained"
 		}
-		return fmt.Errorf("%s failed verification -- update %s", f.Name, fate)
-	default:
-		return fmt.Errorf("file corruption in %s", f.Name)
+		return &verifyError{name: f.Name, fate: fate}
 	}
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_DELTASUM, 1) {
 		rt.Logger.Printf("checksum %x matches!", localSum)
@@ -319,4 +344,64 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 	}
 
 	return nil
+}
+
+// verifyError is a file whose whole-file checksum did not match the
+// sender's, after which rsync tries it once more (receiver.c:recv_files,
+// recv_ok == 0).
+type verifyError struct {
+	name string
+	fate string // what became of the received data
+}
+
+func (e *verifyError) Error() string {
+	return fmt.Sprintf("%s failed verification -- update %s", e.name, e.fate)
+}
+
+// verifyFailed hands a file that failed verification to the generator for
+// the redo pass, with a warning at -v, as rsync does. In the redo pass it
+// is an error, which fails the run (exit 23) but not the transfer.
+func (rt *Transfer) verifyFailed(idx int, e *verifyError) {
+	if !rt.recvRedoing && rt.redo != nil {
+		if rt.Opts.InfoGTE != nil && rt.Opts.InfoGTE(rsyncopts.INFO_NAME, 1) {
+			rt.tell(rsyncwire.MsgWarning, fmt.Sprintf("WARNING: %s failed verification -- update %s (will try again).\n", e.name, e.fate))
+		}
+		rt.redo <- idx
+		return
+	}
+	rt.tell(rsyncwire.MsgErrorXfer, fmt.Sprintf("ERROR: %s failed verification -- update %s.\n", e.name, e.fate))
+	if rt.TellClient == nil && rt.Env != nil {
+		rt.Env.XferErrors.Add(1)
+	}
+}
+
+// tell sends the client msg with tag, or logs it on a client. On a server
+// it only queues msg: the receiver writing while a sending client writes
+// would block both over an unbuffered connection, so the generator sends
+// it, or Do once both are done, as rsync's receiver passes its messages
+// to the generator.
+func (rt *Transfer) tell(tag uint8, msg string) {
+	if rt.TellClient == nil {
+		rt.Logger.Printf("%s", strings.TrimSuffix(msg, "\n"))
+		return
+	}
+	rt.recvMsgsMu.Lock()
+	defer rt.recvMsgsMu.Unlock()
+	rt.recvMsgs = append(rt.recvMsgs, recvMsg{tag, msg})
+}
+
+// flushRecvMsgs sends the client the receiver's queued messages.
+func (rt *Transfer) flushRecvMsgs() {
+	rt.recvMsgsMu.Lock()
+	msgs := rt.recvMsgs
+	rt.recvMsgs = nil
+	rt.recvMsgsMu.Unlock()
+	for _, m := range msgs {
+		rt.TellClient(m.tag, m.msg)
+	}
+}
+
+type recvMsg struct {
+	tag uint8
+	msg string
 }

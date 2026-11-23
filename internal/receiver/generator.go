@@ -45,7 +45,21 @@ func (rt *Transfer) GenerateFiles(fileList []*File) error {
 		return err
 	}
 
-	// TODO: re-do any files that failed
+	// The redo pass: ask again for each file that failed verification,
+	// until the receiver reaches phase 1 (generator.c:generate_files,
+	// check_for_finished_files). The quick check and the options that
+	// leave files alone are off for it, as rsync turns them off.
+	if rt.redo != nil {
+		rt.genRedoing = true
+		for idx := range rt.redo {
+			rt.flushRecvMsgs()
+			if err := rt.recvGenerator(idx, fileList[idx]); err != nil {
+				return err
+			}
+		}
+		rt.genRedoing = false
+		rt.flushRecvMsgs()
+	}
 	phase++
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 		rt.Logger.Printf("generateFiles phase=%d", phase)
@@ -91,7 +105,7 @@ func (rt *Transfer) touchUpDirs() error {
 
 // rsync/generator.c:skip_file
 func (rt *Transfer) skipFile(f *File, st os.FileInfo) (bool, error) {
-	if st.Size() != f.Length {
+	if rt.genRedoing || st.Size() != f.Length {
 		return false, nil
 	}
 
@@ -216,7 +230,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 	mode := f.Mode & rsync.S_IFMT
 	// --existing and --ignore-existing (generator.c:recv_generator). A
 	// folder the destination has is gone into either way.
-	if rt.Opts.IgnoreNonExisting && os.IsNotExist(err) {
+	if rt.Opts.IgnoreNonExisting && !rt.genRedoing && os.IsNotExist(err) {
 		kind := "file"
 		if mode == rsync.S_IFDIR {
 			kind = "directory"
@@ -224,7 +238,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		rt.skipInfo(fmt.Sprintf("not creating new %s \"%s\"", kind, f.Name))
 		return nil
 	}
-	if rt.Opts.IgnoreExisting && err == nil && !(mode == rsync.S_IFDIR && st.IsDir()) {
+	if rt.Opts.IgnoreExisting && !rt.genRedoing && err == nil && !(mode == rsync.S_IFDIR && st.IsDir()) {
 		rt.skipInfo(f.Name + " exists")
 		return nil
 	}
@@ -364,16 +378,16 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		// non-regular files.
 		return nil
 	}
-	if rt.Opts.MaxSize >= 0 && f.Length > rt.Opts.MaxSize {
+	if rt.Opts.MaxSize >= 0 && !rt.genRedoing && f.Length > rt.Opts.MaxSize {
 		rt.skipInfo(f.Name + " is over max-size")
 		return nil
 	}
-	if rt.Opts.MinSize >= 0 && f.Length < rt.Opts.MinSize {
+	if rt.Opts.MinSize >= 0 && !rt.genRedoing && f.Length < rt.Opts.MinSize {
 		rt.skipInfo(f.Name + " is under min-size")
 		return nil
 	}
 	// -u: leave a file that is newer at the destination.
-	if rt.Opts.UpdateOnly && err == nil && st.Mode().IsRegular() && f.ModTime.Unix()-st.ModTime().Unix() < int64(rt.Opts.ModifyWindow) {
+	if rt.Opts.UpdateOnly && !rt.genRedoing && err == nil && st.Mode().IsRegular() && f.ModTime.Unix()-st.ModTime().Unix() < int64(rt.Opts.ModifyWindow) {
 		rt.skipInfo(f.Name + " is newer")
 		return nil
 	}
@@ -466,7 +480,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 	// rsync/generator.c: --append only adds to files, so it leaves a
 	// destination alone when it is not shorter than the source. No --append
 	// sender would read the block sums sent below.
-	if rt.Opts.AppendMode > 0 && st.Size() >= f.Length {
+	if rt.Opts.AppendMode > 0 && !rt.genRedoing && st.Size() >= f.Length {
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			rt.Logger.Printf("append: skipping %s, not shorter than the source (%d/%d bytes)", f.Name, st.Size(), f.Length)
 		}
@@ -479,7 +493,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		return rt.requestFile(idx, changed, rsync.FNAMECMP_FNAME)
 	}
 
-	if rt.Opts.AppendMode > 0 && st.Size() > 0 && st.Size() < f.Length {
+	if rt.Opts.AppendMode > 0 && !rt.genRedoing && st.Size() > 0 && st.Size() < f.Length {
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			rt.Logger.Printf("append: sending prefix sum head for %s (%d/%d bytes)", f.Name, st.Size(), f.Length)
 		}

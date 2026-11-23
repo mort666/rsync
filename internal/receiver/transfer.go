@@ -185,10 +185,25 @@ type Transfer struct {
 	// deleteSkipped how many it kept. The delete pass and the generator
 	// clearing a folder out of a file's way share them.
 	deleteLeft, deleteSkipped int64
-	altBasis                  sync.Map           // *File -> int
-	delStats                  rsyncwire.DelStats // what --delete removed (see countDeleted)
-	touchedBlocks             int64              // 4 KiB blocks written to files (protocol 33 MSG_BLOCK_STATS)
-	dec                       rsynctoken.Decoder // see decoder
+
+	// redo carries the files that failed verification from the receiver
+	// to the generator, which asks for them again in phase 1, the redo
+	// pass (io.c MSG_REDO); the receiver closes it on reaching phase 1
+	// (MSG_DONE). nil when no generator runs. genRedoing is set while
+	// the generator asks for them, recvRedoing once the receiver is in
+	// phase 1; each is touched by its own goroutine only.
+	redo chan int
+
+	// recvMsgs are the receiver's messages for the client, which the
+	// generator sends (see tell).
+	recvMsgsMu    sync.Mutex
+	recvMsgs      []recvMsg
+	genRedoing    bool
+	recvRedoing   bool
+	altBasis      sync.Map           // *File -> int
+	delStats      rsyncwire.DelStats // what --delete removed (see countDeleted)
+	touchedBlocks int64              // 4 KiB blocks written to files (protocol 33 MSG_BLOCK_STATS)
+	dec           rsynctoken.Decoder // see decoder
 
 	// xattrCache holds the file list's xattr lists (-X). genXattr is the
 	// generator's finding for the file it is on, xattrFetched the values
