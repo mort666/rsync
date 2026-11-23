@@ -341,6 +341,9 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		mode |= rsync.S_IFSOCK
 		isSpecial = true
 	}
+	// The entry keeps what an output line shows of it (%i, %n, %B).
+	entry := len(s.fileList.Files) - 1
+	s.fileList.Files[entry].Mode = mode
 
 	// From protocol 28 a device number goes as major and minor, the minor
 	// in one byte when it fits.
@@ -434,16 +437,14 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	}
 
 	// 5.   file length (long)
+	// A folder's size is what the file system says, as rsync sends it
+	// (%l shows it, and it counts in the total size).
 	size := info.Size()
-	if info.Mode().IsDir() {
-		// tmpfs returns non-4K sizes for directories. Override with
-		// 4096 to make the tests succeed regardless of the /tmp file
-		// system type.
-		size = 4096
-	}
 	s.fec.WriteVarlong30(proto, size, 3)
 
-	s.fileList.TotalSize += size
+	if info.Mode().IsRegular() || info.Mode()&fs.ModeSymlink != 0 {
+		s.fileList.TotalSize += size // as rsync counts it (flist.c)
+	}
 
 	// 6.   file modification time (optional, integer; from protocol 30 a
 	//      varlong, which does not run out in 2038)
@@ -482,6 +483,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		}
 		// 8.   if -o, the user id (integer; from protocol 30 a varint)
 		s.fec.WriteVarint30(proto, uid)
+		s.fileList.Files[entry].Uid = uid
 	}
 
 	if opts.PreserveGid() {
@@ -500,6 +502,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		}
 		// 9.   if -g, the group id (integer; from protocol 30 a varint)
 		s.fec.WriteVarint30(proto, gid)
+		s.fileList.Files[entry].Gid = gid
 	}
 
 	if sendRdev {
@@ -534,6 +537,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 			return err // TODO
 		}
 		target = mungedTarget(opts, target)
+		s.fileList.Files[entry].LinkTarget = target
 		s.fec.WriteVarint30(proto, int32(len(target)))
 		s.fec.WriteString(target)
 	}

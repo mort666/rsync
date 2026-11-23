@@ -250,8 +250,16 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		}
 	}
 	if mode == rsync.S_IFDIR {
+		// What the item reports on: the folder that was there, if any.
+		var itemSt os.FileInfo
+		var dirFlags uint32
+		if err == nil && st.IsDir() {
+			itemSt = st
+		} else {
+			dirFlags = rsync.ITEM_LOCAL_CHANGE
+		}
 		if rt.Opts.DryRun {
-			return nil
+			return rt.itemize(idx, f, itemSt, dirFlags, "")
 		}
 		if err == nil && !st.IsDir() {
 			// A file (not a directory) with this name exists. Delete it so that
@@ -290,7 +298,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		if err := rt.setPerms(f, perm); err != nil {
 			return err
 		}
-		return nil
+		return rt.itemize(idx, f, itemSt, dirFlags, "")
 	}
 
 	var destSt os.FileInfo
@@ -317,7 +325,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 						return err
 					}
 					rt.fileDone(idx)
-					return nil // skip
+					return rt.itemize(idx, f, st, 0, "")
 				}
 				// fallthrough to create or replace the symlink
 			}
@@ -327,8 +335,12 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 			rt.fileDone(idx)
 			return nil
 		}
+		var linkSt os.FileInfo
+		if err == nil && st.Mode()&fs.ModeSymlink != 0 {
+			linkSt = st
+		}
 		if rt.Opts.DryRun {
-			return nil // a dry run only says what it would do
+			return rt.itemize(idx, f, linkSt, rsync.ITEM_LOCAL_CHANGE|rsync.ITEM_REPORT_CHANGE, "")
 		}
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			rt.Logger.Printf("symlink %s -> %s", f.Name, f.LinkTarget)
@@ -344,7 +356,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 			return err
 		}
 		rt.fileDone(idx)
-		return nil
+		return rt.itemize(idx, f, linkSt, rsync.ITEM_LOCAL_CHANGE|rsync.ITEM_REPORT_CHANGE, "")
 	}
 
 	if rt.Opts.PreserveDevices && (mode == rsync.S_IFCHR ||
@@ -354,23 +366,34 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		if err != nil && len(rt.basisRoots) > 0 && !rt.Opts.FakeSuper && rt.tryDestsNon(f) {
 			return nil
 		}
-		if rt.Opts.DryRun {
-			return nil
-		}
 		if (mode == rsync.S_IFCHR || mode == rsync.S_IFBLK) && rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			major, minor := splitRdev(f.Rdev)
 			rt.Logger.Printf("mknod(%s, 0%o, [%d,%d])", f.Name, f.Mode, major, minor)
+		}
+		var devSt os.FileInfo
+		if err == nil && sameType(f, st) {
+			devSt = st
+		}
+		if rt.Opts.DryRun {
+			if devSt != nil {
+				return rt.itemize(idx, f, devSt, 0, "")
+			}
+			return rt.itemize(idx, f, nil, rsync.ITEM_LOCAL_CHANGE|rsync.ITEM_REPORT_CHANGE, "")
 		}
 		if rt.Opts.FakeSuper {
 			if err := rt.fakeDevice(f, st); err != nil {
 				return err
 			}
-			return rt.setPerms(f, perm)
-		}
-		if err := rt.createDevice(f, st, perm); err != nil {
+			if err := rt.setPerms(f, perm); err != nil {
+				return err
+			}
+		} else if err := rt.createDevice(f, st, perm); err != nil {
 			return err
 		}
-		return nil
+		if devSt != nil {
+			return rt.itemize(idx, f, devSt, 0, "")
+		}
+		return rt.itemize(idx, f, nil, rsync.ITEM_LOCAL_CHANGE|rsync.ITEM_REPORT_CHANGE, "")
 	}
 
 	if !f.FileMode().IsRegular() {
@@ -474,7 +497,7 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 			return err
 		}
 		rt.fileDone(idx)
-		return nil
+		return rt.itemize(idx, f, st, 0, "")
 	}
 
 	// rsync/generator.c: --append only adds to files, so it leaves a
@@ -591,13 +614,8 @@ func (rt *Transfer) requestFile(idx int, iflags uint32, basis byte) error {
 // the generator found at the destination: what about it differs. A sender
 // that itemizes (-i) prints them.
 func (rt *Transfer) changedFlags(f *File, st os.FileInfo) uint32 {
-	var iflags uint32
-	if st.Size() != f.Length {
-		iflags |= rsync.ITEM_REPORT_SIZE
-	}
-	if rt.Opts.PreserveTimes && !rt.modTimeEqual(st.ModTime(), f.ModTime) {
-		iflags |= rsync.ITEM_REPORT_TIME
-	}
+	// The xattr flag goes with the request (addXattrRequest).
+	iflags := rt.itemFlags(f, st, rsync.ITEM_TRANSFER) &^ (rsync.ITEM_TRANSFER | rsync.ITEM_REPORT_XATTR)
 	if rt.Opts.AlwaysChecksum {
 		iflags |= rsync.ITEM_REPORT_CHANGE
 	}
@@ -678,9 +696,13 @@ func (rt *Transfer) skipInfo(msg string) {
 // that is not empty is reported and f left alone, as rsync's delete_item
 // without DEL_RECURSE does. It reports whether there is room.
 func (rt *Transfer) makeRoom(f *File, st fs.FileInfo) (bool, error) {
+	if rt.Opts.DryRun {
+		return true, nil // a dry run only says what it would do
+	}
 	// With --delete, rsync removes what is in the way with what it holds
 	// (del_opts with DEL_RECURSE), --force or not.
 	if st.IsDir() && rt.Opts.Force {
+		rt.logDeleteContents(filepath.ToSlash(f.Name))
 		return true, rt.DestRoot.RemoveAll(f.Name)
 	}
 	if st.IsDir() && rt.Opts.DeleteMode {
@@ -690,6 +712,7 @@ func (rt *Transfer) makeRoom(f *File, st fs.FileInfo) (bool, error) {
 		n := rt.delStats.Total()
 		rt.delStats = saved
 		if rt.mayDelete(n) {
+			rt.logDeleteContents(filepath.ToSlash(f.Name))
 			return true, rt.DestRoot.RemoveAll(f.Name)
 		}
 	}

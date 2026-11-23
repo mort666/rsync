@@ -4,10 +4,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/gokrazy/rsync"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/gokrazy/rsync/internal/panicerr"
 	"github.com/gokrazy/rsync/internal/rsyncopts"
@@ -49,15 +51,13 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 			}
 			return
 		}
-		if rt.Opts.Verbose {
-			rt.Logger.Printf("  deleting %s", path)
-		}
 		counted := rt.delStats
 		rt.countDeleted(path, info)
 		if !rt.mayDelete(rt.delStats.Total() - counted.Total()) {
 			rt.delStats = counted
 			return
 		}
+		rt.logDeleteTree(path, info)
 		if rt.Opts.DryRun {
 			return
 		}
@@ -85,6 +85,13 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 				return name
 			}
 			return dir + "/" + name
+		}
+		if rt.deleteDuring() {
+			// rsync deletes from a folder after the generator has looked
+			// at it, so its item shows the folder's time from before.
+			if st, err := rt.DestRoot.Stat(dir); err == nil {
+				rt.preDeleteTimes[dir] = st.ModTime()
+			}
 		}
 		for i := len(entries) - 1; i >= 0; i-- {
 			if path := join(entries[i].Name()); !inList[path] {
@@ -160,9 +167,17 @@ func (rt *Transfer) deleteFailed(path string, err error) {
 // rsync/main.c:do_recv
 func (rt *Transfer) Do(c *rsyncwire.Conn, fileList []*File, noReport bool) (*rsyncstats.TransferStats, error) {
 	rt.defaultPerms = defaultPerms()
+	if rt.Out != nil && rt.Out.ChecksumLen == 0 {
+		// %C pads to the length of the sum it would show.
+		rt.Out.ChecksumLen = rt.strong().Len()
+		if rt.Opts.AlwaysChecksum {
+			rt.Out.ChecksumLen = rt.strong().FileLen()
+		}
+	}
 	defer rt.closeDecoder()
 
 	rt.deleteLeft = int64(rt.Opts.MaxDelete)
+	rt.preDeleteTimes = make(map[string]time.Time)
 	defer rt.reportDeleteLimit()
 
 	// --delete-delay and --delete-after delete once the transfer is done;
@@ -344,4 +359,60 @@ func (rt *Transfer) reportDeleteLimit() {
 	} else if rt.Env != nil {
 		rt.Env.XferErrors.Add(1)
 	}
+}
+
+// logDeleteTree tells of path and, for a folder, what it holds, deepest
+// first and each folder's entries last name first, as rsync's
+// delete_dir_contents removes them.
+func (rt *Transfer) logDeleteTree(path string, info fs.DirEntry) {
+	if info.IsDir() {
+		if entries, err := fs.ReadDir(rt.DestRoot.FS(), path); err == nil {
+			for i := len(entries) - 1; i >= 0; i-- {
+				rt.logDeleteTree(path+"/"+entries[i].Name(), entries[i])
+			}
+		}
+	}
+	rt.logDelete(path, info.IsDir())
+}
+
+// logDeleteContents tells of what a folder holds, which goes to make
+// room for a file: rsync names those, not the folder (delete_item with
+// DEL_MAKE_ROOM).
+func (rt *Transfer) logDeleteContents(dir string) {
+	entries, err := fs.ReadDir(rt.DestRoot.FS(), dir)
+	if err != nil {
+		return
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		rt.logDeleteTree(dir+"/"+entries[i].Name(), entries[i])
+	}
+}
+
+// logDelete tells of one deleted name (log.c:log_delete): a server sends
+// it to a client that asked (MSG_DELETED, protocol 29+), a client prints
+// it.
+func (rt *Transfer) logDelete(name string, dir bool) {
+	if rt.TellClient == nil {
+		mode := uint32(rsync.S_IFREG)
+		if dir {
+			mode = rsync.S_IFDIR
+		}
+		rt.Out.LogDelete(name, mode)
+		return
+	}
+	if !rt.Opts.ReportDeletes || rt.Conn == nil || rt.Conn.Session.Protocol < 29 {
+		return
+	}
+	if dir {
+		name += "\x00" // a folder's name comes with its NUL
+	}
+	rt.TellClient(rsyncwire.MsgDeleted, name)
+}
+
+// deleteDuring is whether rsync would delete during the transfer, folder
+// by folder (--delete-during, which --delete is from protocol 30), where
+// this receiver deletes before it: the result is the same, but rsync's
+// items compare folders as they were before.
+func (rt *Transfer) deleteDuring() bool {
+	return !rt.Opts.DeleteBefore && !rt.Opts.DeleteAfter && rt.Conn != nil && rt.Conn.Session.Protocol >= 30
 }

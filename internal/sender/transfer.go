@@ -1,6 +1,7 @@
 package sender
 
 import (
+	"github.com/gokrazy/rsync/internal/outformat"
 	"io"
 
 	"github.com/gokrazy/rsync/internal/log"
@@ -71,6 +72,12 @@ type Transfer struct {
 
 	// state
 	redo bool // in the redo pass: OnSend told of its files already
+
+	// Out prints items with the --out-format and to the --log-file; nil
+	// prints nothing. itemStart is what had been written when the current
+	// file began, for %b.
+	Out       *outformat.Logger
+	itemStart int64
 
 	// attrs are the item attributes the generator sent with the file being
 	// sent, echoed back before its data (protocol 29+).

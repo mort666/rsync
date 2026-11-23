@@ -650,6 +650,7 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			NumericIds:        opts.NumericIds(),
 			RemoveSourceFiles: opts.RemoveSourceFiles(),
 			DeleteAfter:       opts.DeleteAfterTransfer(),
+			DeleteBefore:      opts.DeleteBefore(),
 			PreservePerms:     opts.PreservePerms(),
 			PreserveDevices:   opts.PreserveDevices(),
 			PreserveSpecials:  opts.PreserveSpecials(),
@@ -685,6 +686,8 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 			mpx.WriteMsg(tag, []byte(msg))
 		},
 	}
+	rt.Opts.ItemizeAll = opts.StdoutFormatHasI() > 1 || opts.InfoGTE(rsyncopts.INFO_NAME, 2)
+	rt.Opts.ReportDeletes = opts.InfoGTE(rsyncopts.INFO_DEL, 1) || opts.StdoutFormat() != ""
 	if err := os.MkdirAll(rt.Dest, 0755); err != nil {
 		return fmt.Errorf("MkdirAll(dest=%s): %v", rt.Dest, err)
 	}

@@ -48,6 +48,13 @@ func (st *Transfer) Do(crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWri
 	if exclusionList == nil {
 		exclusionList = &filterRuleList{}
 	}
+	if st.Out != nil && st.Out.ChecksumLen == 0 {
+		// %C pads to the length of the sum it would show.
+		st.Out.ChecksumLen = st.strong().Len()
+		if st.Opts.AlwaysChecksum() {
+			st.Out.ChecksumLen = st.strong().FileLen()
+		}
+	}
 
 	// “Update exchange” as per
 	// https://github.com/kristapsdz/openrsync/blob/master/rsync.5

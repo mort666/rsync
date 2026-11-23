@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/gokrazy/rsync/internal/outformat"
 	"io"
 	"io/fs"
 	"os"
@@ -63,6 +64,7 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 			if attrs.Iflags&rsync.ITEM_REPORT_XATTR != 0 {
 				rt.setXattrsInPlace(fileList[idx], fetched)
 			}
+			rt.Out.MaybeLogItem(fileList[idx].item(attrs))
 			continue
 		}
 		rt.xattrFetched = fetched
@@ -73,9 +75,14 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_RECV, 1) {
 			rt.Logger.Printf("receiving file idx=%d: %+v", idx, fileList[idx])
 		}
-		if rt.Opts.Progress {
-			fmt.Fprintln(rt.Env.Stdout, fileList[idx].Name)
+		it := fileList[idx].item(attrs)
+		if rt.Opts.DryRun {
+			rt.Out.LogItem(outformat.Client, it)
+			rt.fileDone(int(idx))
+			continue
 		}
+		rt.Out.Before(it, fileList[idx].Name)
+		before := rt.bytesRead()
 		if err := rt.recvFile1(fileList[idx]); err != nil {
 			var verr *verifyError
 			if !errors.As(err, &verr) {
@@ -84,6 +91,8 @@ func (rt *Transfer) RecvFiles(fileList []*File) error {
 			rt.verifyFailed(int(idx), verr)
 			continue
 		}
+		it.Bytes = rt.bytesRead() - before
+		rt.Out.After(it)
 		rt.fileDone(int(idx))
 	}
 	if rt.Opts.DebugGTE(rsyncopts.DEBUG_RECV, 1) {
@@ -104,12 +113,6 @@ func (rt *Transfer) partialName(name string) string {
 }
 
 func (rt *Transfer) recvFile1(f *File) error {
-	if rt.Opts.DryRun {
-		if !rt.Opts.Server {
-			fmt.Fprintln(rt.Env.Stdout, f.Name)
-		}
-		return nil
-	}
 
 	st, err := rt.lstat(f.Name)
 	if err != nil || !st.Mode().IsRegular() {

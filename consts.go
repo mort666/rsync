@@ -52,6 +52,8 @@ const (
 	ITEM_IS_NEW             = (1 << 13)
 	ITEM_LOCAL_CHANGE       = (1 << 14)
 	ITEM_TRANSFER           = (1 << 15) // the generator wants the file's data
+	ITEM_MISSING_DATA       = (1 << 16) // for output only: the data could not be had
+	ITEM_DELETED            = (1 << 17) // for output only: the item was deleted
 )
 
 // Basis types (rsync.h): which file the generator's checksums came from,

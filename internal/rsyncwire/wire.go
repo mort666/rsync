@@ -183,9 +183,14 @@ func (w *MultiplexReader) Read(p []byte) (n int, err error) {
 	case MsgDeleted:
 		// From protocol 29 a server receiver names each file --delete
 		// removed, for a client that asked for -v.
+		dir := strings.HasSuffix(string(payload), "\x00") // a folder comes with its NUL
 		name := strings.TrimRight(string(payload), "\x00")
-		if strings.HasSuffix(string(payload), "\x00") {
-			name += "/" // directories are sent with a trailing NUL
+		if w.Env.Deleted != nil {
+			w.Env.Deleted(name, dir)
+			return 0, nil
+		}
+		if dir {
+			name += "/"
 		}
 		w.Env.Logf("deleting %s", name)
 		return 0, nil

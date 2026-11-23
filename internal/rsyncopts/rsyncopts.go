@@ -10,6 +10,7 @@ package rsyncopts
 import (
 	"errors"
 	"fmt"
+	"github.com/gokrazy/rsync/internal/outformat"
 	"math"
 	"os"
 	"slices"
@@ -332,43 +333,51 @@ type Options struct {
 	logfile_format   string
 	stdout_format    string
 	itemize_changes  int
-	bwlimit_arg      string
-	bwlimit          int
-	make_backups     int
-	backup_dir       string
-	backup_suffix    string
-	list_only        int
-	batch_name       string
-	files_from       string
-	eol_nulls        int
-	old_style_args   int // intentionally set to 0; unsupported
-	protect_args     int // intentionally set to 0; currently unsupported
-	trust_sender     int
-	numeric_ids      int
-	io_timeout       int
-	connect_timeout  int
-	do_fsync         int
-	shell_cmd        string
-	rsync_path       string
-	tmpdir           string
-	iconv_opt        string
-	default_af_hint  int
-	allow_8bit_chars int
-	mkpath_dest_arg  int
-	use_qsort        int
-	copy_as          string
-	bind_address     string // numeric IPv4 or IPv6, or a hostname
-	rsync_port       int
-	sockopts         string
-	password_file    string
-	early_input_file string
-	blocking_io      int
-	outbuf_mode      string
-	protocol_version int
-	checksum_seed    int
-	am_server        int
-	am_sender        int
-	am_daemon        int
+
+	// Set after parsing, as rsync/options.c does: whether the --out-format
+	// has %i (2 for -ii, or %I from a client), and %o or %i; whether an
+	// item is printed before its data; whether the log file format has %i.
+	stdout_format_has_i      int
+	stdout_format_has_o_or_i bool
+	log_before_transfer      bool
+	logfile_format_has_i     bool
+	bwlimit_arg              string
+	bwlimit                  int
+	make_backups             int
+	backup_dir               string
+	backup_suffix            string
+	list_only                int
+	batch_name               string
+	files_from               string
+	eol_nulls                int
+	old_style_args           int // intentionally set to 0; unsupported
+	protect_args             int // intentionally set to 0; currently unsupported
+	trust_sender             int
+	numeric_ids              int
+	io_timeout               int
+	connect_timeout          int
+	do_fsync                 int
+	shell_cmd                string
+	rsync_path               string
+	tmpdir                   string
+	iconv_opt                string
+	default_af_hint          int
+	allow_8bit_chars         int
+	mkpath_dest_arg          int
+	use_qsort                int
+	copy_as                  string
+	bind_address             string // numeric IPv4 or IPv6, or a hostname
+	rsync_port               int
+	sockopts                 string
+	password_file            string
+	early_input_file         string
+	blocking_io              int
+	outbuf_mode              string
+	protocol_version         int
+	checksum_seed            int
+	am_server                int
+	am_sender                int
+	am_daemon                int
 
 	daemon_bwlimit int
 	config_file    string
@@ -740,8 +749,33 @@ See https://github.com/gokrazy/rsync for updates, bug reports, and answers
 `
 }
 
-func (o *Options) ShellCommand() string    { return o.shell_cmd }
-func (o *Options) UpdateOnly() bool        { return o.update_only != 0 }
+func (o *Options) ShellCommand() string { return o.shell_cmd }
+func (o *Options) UpdateOnly() bool     { return o.update_only != 0 }
+
+// StdoutFormat is the --out-format (or what -i or -v imply), empty for
+// none.
+func (o *Options) StdoutFormat() string { return o.stdout_format }
+
+// StdoutFormatHasI is 0 without %i in the --out-format, 1 with it, and 2
+// with -ii, which reports unchanged items too.
+func (o *Options) StdoutFormatHasI() int { return o.stdout_format_has_i }
+
+// StdoutFormatHasOorI is whether the --out-format has %o or %i: deletes
+// are then printed with it rather than as "deleting %n".
+func (o *Options) StdoutFormatHasOorI() bool { return o.stdout_format_has_o_or_i }
+
+// LogBeforeTransfer is whether a client prints an item before its data,
+// which it does unless the format counts bytes (%b, %c or %C).
+func (o *Options) LogBeforeTransfer() bool { return o.log_before_transfer }
+
+// LogFile is the --log-file, and LogFileFormat its format.
+func (o *Options) LogFile() string { return o.logfile_name }
+
+func (o *Options) LogFileFormat() string { return o.logfile_format }
+
+// LogFileFormatHasI is whether the --log-file-format has %i.
+func (o *Options) LogFileFormatHasI() bool { return o.logfile_format_has_i }
+
 func (o *Options) DryRun() bool            { return o.dry_run != 0 }
 func (o *Options) PreserveLinks() bool     { return o.preserve_links != 0 }
 func (o *Options) PreserveUid() bool       { return o.preserve_uid != 0 }
@@ -780,9 +814,13 @@ func (o *Options) DeleteMode() bool { return o.delete_mode != 0 }
 // protocol 30), or after the transfer (--delete-delay, --delete-after).
 // DeleteExcluded is --delete-excluded.
 func (o *Options) DeleteAfterTransfer() bool { return o.delete_after != 0 || o.delete_during == 2 }
-func (o *Options) DeleteExcluded() bool      { return o.delete_excluded != 0 }
-func (o *Options) Sender() bool              { return o.am_sender != 0 }
-func (o *Options) SetSender()                { o.am_sender = 1 }
+
+// DeleteBefore is an explicit --delete-before.
+func (o *Options) DeleteBefore() bool { return o.delete_before != 0 }
+
+func (o *Options) DeleteExcluded() bool { return o.delete_excluded != 0 }
+func (o *Options) Sender() bool         { return o.am_sender != 0 }
+func (o *Options) SetSender()           { o.am_sender = 1 }
 func (o *Options) SetListOnly() {
 	o.list_only = 1
 	if o.recurse == 0 {
@@ -1188,16 +1226,15 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"prune-empty-dirs", "m", POPT_ARG_VAL, &o.prune_empty_dirs, 1},
 		//{"no-prune-empty-dirs", "", POPT_ARG_VAL, &o.prune_empty_dirs, 0},
 		//{"no-m", "", POPT_ARG_VAL, &o.prune_empty_dirs, 0},
-		//{"log-file", "", POPT_ARG_STRING, &o.logfile_name, 0},
-		//{"log-file-format", "", POPT_ARG_STRING, &o.logfile_format, 0},
-		//{"out-format", "", POPT_ARG_STRING, &o.stdout_format, 0},
-		// A client with -i sends the server --log-format=%i, for the
-		// server's own log. Accepted, and ignored, so such a client can push
-		// to a gokrazy server.
+		{"log-file", "", POPT_ARG_STRING, &o.logfile_name, 0},
+		{"log-file-format", "", POPT_ARG_STRING, &o.logfile_format, 0},
+		{"out-format", "", POPT_ARG_STRING, &o.stdout_format, 0},
+		// A sending client tells the server what to report with
+		// --log-format=%i (or %i%I, or %o).
 		{"log-format", "", POPT_ARG_STRING, &o.stdout_format, 0}, /* DEPRECATED */
-		//{"itemize-changes", "i", POPT_ARG_NONE, nil, 'i'},
-		//{"no-itemize-changes", "", POPT_ARG_VAL, &o.itemize_changes, 0},
-		//{"no-i", "", POPT_ARG_VAL, &o.itemize_changes, 0},
+		{"itemize-changes", "i", POPT_ARG_NONE, nil, 'i'},
+		{"no-itemize-changes", "", POPT_ARG_VAL, &o.itemize_changes, 0},
+		{"no-i", "", POPT_ARG_VAL, &o.itemize_changes, 0},
 		//{"bwlimit", "", POPT_ARG_STRING, &o.bwlimit_arg, OPT_BWLIMIT},
 		//{"no-bwlimit", "", POPT_ARG_VAL, &o.bwlimit, 0},
 		//{"backup", "b", POPT_ARG_VAL, &o.make_backups, 1},
@@ -1916,8 +1953,29 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 		}
 	}
 
+	// rsync/options.c: what is printed for each item, and whether before
+	// its data (log_before_transfer) or after, for a format that counts
+	// what went over the wire.
+	notServer := opts.am_server == 0
+	if opts.stdout_format != "" {
+		if opts.am_server != 0 && outformat.Has(opts.stdout_format, 'I') {
+			opts.stdout_format_has_i = 2
+		} else if outformat.Has(opts.stdout_format, 'i') {
+			opts.stdout_format_has_i = opts.itemize_changes | 1
+		}
+		if !outformat.Has(opts.stdout_format, 'b') &&
+			!outformat.Has(opts.stdout_format, 'c') &&
+			!outformat.Has(opts.stdout_format, 'C') {
+			opts.log_before_transfer = notServer
+		}
+	} else if opts.itemize_changes != 0 {
+		opts.stdout_format = "%i %n%L"
+		opts.stdout_format_has_i = opts.itemize_changes
+		opts.log_before_transfer = notServer
+	}
+
 	if opts.do_progress != 0 && opts.am_server == 0 {
-		if opts.info[INFO_NAME] == 0 {
+		if !opts.log_before_transfer && opts.info[INFO_NAME] == 0 {
 			opts.info[INFO_NAME] = 1
 		}
 		opts.info[INFO_FLIST] = 2
@@ -1926,6 +1984,21 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 
 	if opts.info[INFO_NAME] >= 1 && opts.stdout_format == "" {
 		opts.stdout_format = "%n%L"
+		opts.log_before_transfer = notServer
+	}
+	if opts.stdout_format_has_i != 0 || outformat.Has(opts.stdout_format, 'o') {
+		opts.stdout_format_has_o_or_i = true
+	}
+
+	if opts.logfile_name != "" && opts.am_daemon == 0 {
+		if opts.logfile_format == "" {
+			opts.logfile_format = "%i %n%L"
+			opts.logfile_format_has_i = true
+		} else if outformat.Has(opts.logfile_format, 'i') {
+			opts.logfile_format_has_i = true
+		}
+	} else if opts.am_daemon == 0 {
+		opts.logfile_format = ""
 	}
 
 	return nil

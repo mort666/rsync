@@ -143,6 +143,20 @@ func (o *Options) ServerOptions() []string {
 		sargv = append(sargv, argstr)
 	}
 
+	// The server does not use the client's --out-format, but a receiving
+	// one needs to know what to report (options.c:server_options); it is
+	// --log-format, not --out-format, for older servers.
+	if o.stdout_format != "" && o.Sender() {
+		switch {
+		case o.stdout_format_has_i > 1:
+			sargv = append(sargv, "--log-format=%i%I")
+		case o.stdout_format_has_i != 0:
+			sargv = append(sargv, "--log-format=%i")
+		case o.stdout_format_has_o_or_i:
+			sargv = append(sargv, "--log-format=%o")
+		}
+	}
+
 	if o.checksum_choice != "" {
 		sargv = append(sargv, "--checksum-choice="+o.checksum_choice)
 	}

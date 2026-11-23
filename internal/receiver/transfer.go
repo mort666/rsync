@@ -1,11 +1,13 @@
 package receiver
 
 import (
+	"github.com/gokrazy/rsync/internal/outformat"
 	"io"
 	"io/fs"
 	"math"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/gokrazy/rsync/internal/log"
 	"github.com/gokrazy/rsync/internal/progress"
@@ -102,6 +104,16 @@ type TransferOpts struct {
 	// with PreserveTimes too.
 	OmitDirTimes bool
 
+	// ItemizeAll reports unchanged items too (-ii, or --info=name2).
+	ItemizeAll bool
+
+	// ReportDeletes has a server tell its client of each deleted name
+	// (--info=del, or an --out-format, as -v and -i give).
+	ReportDeletes bool
+
+	// DeleteBefore is an explicit --delete-before.
+	DeleteBefore bool
+
 	Inplace     bool
 	KeepPartial bool
 	PartialDir  string
@@ -163,6 +175,10 @@ type Transfer struct {
 	// it; a client counts the error in Env.XferErrors instead.
 	TellClient func(tag uint8, msg string)
 
+	// Out prints items with the --out-format and to the --log-file; nil
+	// prints nothing.
+	Out *outformat.Logger
+
 	// state
 	Conn         *rsyncwire.Conn
 	Seed         int32
@@ -185,6 +201,10 @@ type Transfer struct {
 	// deleteSkipped how many it kept. The delete pass and the generator
 	// clearing a folder out of a file's way share them.
 	deleteLeft, deleteSkipped int64
+
+	// preDeleteTimes are the folders' times from before the delete pass
+	// (see deleteDuring), by slash-separated name.
+	preDeleteTimes map[string]time.Time
 
 	// redo carries the files that failed verification from the receiver
 	// to the generator, which asks for them again in phase 1, the redo
