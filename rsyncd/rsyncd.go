@@ -558,10 +558,11 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 	// shared by the transfer.
 	env := &rsyncos.Env{Stderr: s.stderr}
 
-	// From protocol 30 the client multiplexes its output as well
-	// (main.c:start_server, need_messages_from_generator), and at any
-	// protocol with --remove-source-files.
-	if c.Session.Protocol >= 30 || opts.RemoveSourceFiles() {
+	// From protocol 30 the client multiplexes its output as well. Below 30
+	// only a receiving client does, with --remove-source-files
+	// (main.c:start_server, need_messages_from_generator, and
+	// do_server_recv, which reads plain input below 30).
+	if c.Session.Protocol >= 30 || (opts.RemoveSourceFiles() && opts.Sender()) {
 		mrd := &rsyncwire.MultiplexReader{Env: env, Reader: rd, Trace: trace, Protocol: c.Session.Protocol}
 		c.Reader = struct {
 			io.Reader

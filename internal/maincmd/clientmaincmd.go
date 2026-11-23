@@ -419,10 +419,11 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	}
 	c.Reader = crd
 
-	// From protocol 30 the client multiplexes its output too
-	// (need_messages_from_generator), from right after the seed, and at
-	// any protocol with --remove-source-files, for MSG_SUCCESS.
-	if c.Session.Protocol >= 30 || opts.RemoveSourceFiles() {
+	// From protocol 30 the client multiplexes its output too, from right
+	// after the seed. Below 30 only a receiving client does, and only with
+	// --remove-source-files, for MSG_SUCCESS (main.c:client_run,
+	// need_messages_from_generator); a sending client never does.
+	if c.Session.Protocol >= 30 || (opts.RemoveSourceFiles() && !opts.Sender()) {
 		mpx := &rsyncwire.MultiplexWriter{Writer: cwr, Trace: trace}
 		cwr = &rsyncwire.CountingWriter{W: mpx, BytesWritten: cwr.BytesWritten}
 		c.Writer = cwr
