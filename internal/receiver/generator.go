@@ -269,6 +269,9 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		if err != nil && len(rt.basisRoots) > 0 && rt.tryDestsNon(f) {
 			return nil
 		}
+		if rt.Opts.DryRun {
+			return nil // a dry run only says what it would do
+		}
 		if rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
 			rt.Logger.Printf("symlink %s -> %s", f.Name, f.LinkTarget)
 		}
@@ -290,6 +293,9 @@ func (rt *Transfer) recvGenerator(idx int, f *File) error {
 		mode == rsync.S_IFSOCK ||
 		mode == rsync.S_IFIFO) {
 		if err != nil && len(rt.basisRoots) > 0 && !rt.Opts.FakeSuper && rt.tryDestsNon(f) {
+			return nil
+		}
+		if rt.Opts.DryRun {
 			return nil
 		}
 		if (mode == rsync.S_IFCHR || mode == rsync.S_IFBLK) && rt.Opts.DebugGTE(rsyncopts.DEBUG_GENR, 1) {
