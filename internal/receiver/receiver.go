@@ -279,9 +279,8 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		// In place, a block matched at its own offset is already there:
 		// only the checksum needs it. (The basis is the destination itself
 		// here, as --inplace turns off the partial dir.)
-		skip := rt.Opts.Inplace && offset2 == offset
-		if skip {
-			blockWr = h
+		if rt.Opts.Inplace && offset2 == offset {
+			blockWr = io.MultiWriter(h, out.Matched())
 		}
 		if see := dec.See(int64(dataLen)); see != nil {
 			blockWr = io.MultiWriter(blockWr, see)
@@ -294,11 +293,6 @@ func (rt *Transfer) receiveData(f *File, localFile *os.File, perm fs.FileMode) e
 		if n != int64(dataLen) {
 			// The basis file shrank since the generator summed it.
 			return fmt.Errorf("reading block %d of %s: %w", token, out.Name(), io.ErrUnexpectedEOF)
-		}
-		if skip {
-			if err := out.Skip(n); err != nil {
-				return err
-			}
 		}
 		offset += n
 	}

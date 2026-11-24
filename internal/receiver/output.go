@@ -33,10 +33,9 @@ type outputMode struct {
 	Fsync bool
 
 	// Sparse leaves long runs of zeros as holes instead of writing them
-	// (--sparse). Only honored when writing through a temporary file: in
-	// Inplace mode a skipped run would keep the destination's old bytes where
-	// the zeros belong, and real rsync punches holes there instead, which
-	// this implementation does not do. Inplace writes the zeros.
+	// (--sparse). In Inplace mode the destination's old bytes would stay
+	// where the zeros belong, so the run is punched out as a hole instead,
+	// or written as zeros where the system cannot punch holes.
 	Sparse bool
 }
 
@@ -63,6 +62,11 @@ type pendingFile struct {
 	written   int64
 	closed    bool
 	done      bool
+
+	// hole is how much of the file, ending at written, is zeros not yet
+	// on disk (rsync/fileio.c:sparse_seek): a temporary file leaves them
+	// as a hole, an in-place one punches them out once data follows.
+	hole int64
 
 	// blocks tracks the 4 KiB blocks this file's writes touched.
 	blocks blockTracker
@@ -142,7 +146,7 @@ func (p *pendingFile) Name() string { return p.finalPath }
 
 func (p *pendingFile) Write(b []byte) (int, error) {
 	if p.sparse() {
-		return p.sparseWrite(b)
+		return p.sparseWrite(b, false)
 	}
 	n, err := p.f.Write(b)
 	p.blocks.track(p.written, int64(n))
@@ -150,49 +154,119 @@ func (p *pendingFile) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Skip moves past n bytes that are already in the file: a block an
-// in-place transfer matched at its own offset, which rsync does not write
-// again (receiver.c:receive_data, skip_matched).
-func (p *pendingFile) Skip(n int64) error {
+// Matched returns where a block that an in-place transfer matched at its
+// own offset goes: the bytes are already in the file, so rsync moves past
+// them rather than writing them again, but with --sparse still punches out
+// their long runs of zeros (receiver.c:receive_data, skip_matched).
+func (p *pendingFile) Matched() io.Writer { return matchedWriter{p} }
+
+type matchedWriter struct{ p *pendingFile }
+
+func (m matchedWriter) Write(b []byte) (int, error) {
+	p := m.p
 	if !p.mode.Inplace {
-		return fmt.Errorf("skipping %d bytes of %s needs --inplace", n, p.finalPath)
+		return 0, fmt.Errorf("skipping %d bytes of %s needs --inplace", len(b), p.finalPath)
 	}
-	if _, err := p.f.Seek(n, io.SeekCurrent); err != nil {
-		return err
+	if p.sparse() {
+		return p.sparseWrite(b, true)
 	}
-	p.written += n
-	return nil
+	if _, err := p.f.Seek(int64(len(b)), io.SeekCurrent); err != nil {
+		return 0, err
+	}
+	p.written += int64(len(b))
+	return len(b), nil
 }
 
 // sparse reports whether runs of zeros become holes; see outputMode.Sparse.
-func (p *pendingFile) sparse() bool { return p.mode.Sparse && !p.mode.Inplace }
+func (p *pendingFile) sparse() bool { return p.mode.Sparse }
 
-// zeroBlock is the shortest run of zeros that is worth turning into a hole.
+// sparseRun is the shortest run of zeros inside a write that is worth
+// turning into a hole; zeros at either end of a write always are, as they
+// may join holes in the writes around it.
 //
 // rsync/fileio.c:SPARSE_WRITE_SIZE
-var zeroBlock = make([]byte, 1024)
+const sparseRun = 1024
 
-// sparseWrite skips over zeros instead of writing them, leaving a hole in the
-// file. It positions every write itself (WriteAt at p.written), so the file
-// offset that Write would use is never consulted.
+// sparseWrite leaves zeros out of the file instead of writing them. It
+// positions every write itself (WriteAt at p.written), so the file offset
+// that Write would use is never consulted. matched says the bytes are
+// already on disk (an in-place block match): only the zeros among them
+// need doing.
 //
 // rsync/fileio.c:write_sparse
-func (p *pendingFile) sparseWrite(buf []byte) (int, error) {
-	rest := buf
-	for len(rest) > 0 {
-		data := bytes.TrimLeft(rest, "\x00")
-		p.written += int64(len(rest) - len(data))
-		rest = nil
-		if idx := bytes.Index(data, zeroBlock); idx > -1 {
-			data, rest = data[:idx], data[idx:]
+func (p *pendingFile) sparseWrite(buf []byte, matched bool) (int, error) {
+	data := bytes.TrimLeft(buf, "\x00")
+	p.skipZeros(len(buf) - len(data))
+	trailing := len(data)
+	data = bytes.TrimRight(data, "\x00")
+	trailing -= len(data)
+	for len(data) > 0 {
+		span := data
+		var zeros int
+		for i := 0; i < len(data); {
+			if data[i] != 0 {
+				i++
+				continue
+			}
+			z := 1
+			for i+z < len(data) && data[i+z] == 0 {
+				z++
+			}
+			if z >= sparseRun {
+				span, zeros = data[:i], z
+				break
+			}
+			i += z
 		}
-		if _, err := p.f.WriteAt(data, p.written); err != nil {
+		if err := p.emit(span, matched); err != nil {
 			return 0, err
 		}
-		p.blocks.track(p.written, int64(len(data)))
-		p.written += int64(len(data))
+		data = data[len(span)+zeros:]
+		p.skipZeros(zeros)
 	}
+	p.skipZeros(trailing)
 	return len(buf), nil
+}
+
+// skipZeros adds n zeros to the hole being built.
+func (p *pendingFile) skipZeros(n int) {
+	p.hole += int64(n)
+	p.written += int64(n)
+}
+
+// emit puts span, data that is not a hole, at p.written: written out, or
+// for matched data already there, left alone. The hole before it goes
+// first.
+//
+// rsync/fileio.c:emit_sparse_span
+func (p *pendingFile) emit(span []byte, matched bool) error {
+	if err := p.flushHole(); err != nil {
+		return err
+	}
+	if !matched {
+		if _, err := p.f.WriteAt(span, p.written); err != nil {
+			return err
+		}
+		p.blocks.track(p.written, int64(len(span)))
+	}
+	p.written += int64(len(span))
+	return nil
+}
+
+// flushHole makes the zeros before p.written a hole. A temporary file
+// has nothing there to remove; in place, the old bytes are punched out.
+//
+// rsync/fileio.c:flush_sparse_hole
+func (p *pendingFile) flushHole() error {
+	if p.hole == 0 {
+		return nil
+	}
+	off, n := p.written-p.hole, p.hole
+	p.hole = 0
+	if !p.mode.Inplace {
+		return nil
+	}
+	return punchHole(p.f, off, n)
 }
 
 // SeekToAppendOffset positions the destination file at offset and accounts for
@@ -217,6 +291,10 @@ func (p *pendingFile) SeekToAppendOffset(offset int64) error {
 // CloseAtomicallyReplace finalizes the transfer.
 func (p *pendingFile) CloseAtomicallyReplace() error {
 	if p.mode.Inplace {
+		// A trailing run of zeros is punched out too (sparse_end).
+		if err := p.flushHole(); err != nil {
+			return err
+		}
 		// The previous destination may have been longer; trim to the size
 		// the sender actually delivered.
 		if err := p.f.Truncate(p.written); err != nil {
@@ -291,4 +369,18 @@ func (p *pendingFile) sync() error {
 		return nil
 	}
 	return p.f.Sync()
+}
+
+// writeZeros writes n zeros to f at off.
+func writeZeros(f *os.File, off, n int64) error {
+	zeros := make([]byte, min(n, 4096))
+	for n > 0 {
+		w, err := f.WriteAt(zeros[:min(n, int64(len(zeros)))], off)
+		if err != nil {
+			return err
+		}
+		off += int64(w)
+		n -= int64(w)
+	}
+	return nil
 }

@@ -98,11 +98,11 @@ func TestPendingFileBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer q.Cleanup()
-	if err := q.Skip(4096); err != nil {
+	if err := skip(q, 4096); err != nil {
 		t.Fatal(err)
 	}
 	q.Write([]byte("y"))
-	if err := q.Skip(4095 + 4096); err != nil {
+	if err := skip(q, 4095+4096); err != nil {
 		t.Fatal(err)
 	}
 	if q.blocks.touched != 1 {
@@ -135,7 +135,13 @@ func TestPendingFileSkipNeedsInplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Cleanup()
-	if err := p.Skip(1); err == nil {
+	if err := skip(p, 1); err == nil {
 		t.Error("Skip in a temporary file succeeded")
 	}
+}
+
+// skip passes n bytes of a block matched in place.
+func skip(p *pendingFile, n int) error {
+	_, err := p.Matched().Write(make([]byte, n))
+	return err
 }
