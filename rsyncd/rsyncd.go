@@ -586,7 +586,7 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 			return fmt.Errorf("ERROR: --remove-source-files cannot be used with a read-only module")
 		}
 
-		return s.handleConnSender(module, crd, cwr, paths, opts, c, sessionChecksumSeed, mpx, env)
+		return s.handleConnSender(module, crd, cwr, rd, paths, opts, c, sessionChecksumSeed, mpx, env)
 	}
 
 	// If returning an error, send the error to the client for display, too:
@@ -600,6 +600,12 @@ func (s *Server) handleConn(ctx context.Context, conn *Conn, module *Module, pc 
 
 // handleConnReceiver is equivalent to rsync/main.c:do_server_recv
 func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter, env *rsyncos.Env) (err error) {
+	if opts.FilesFrom() != "" {
+		// A client sends --files-from to a receiving server only to name a
+		// file on this side, which the server must read and send back
+		// (main.c:do_server_recv); not done yet.
+		return fmt.Errorf("--files-from naming a file on the receiving side is not supported yet")
+	}
 	var destPath string
 	implicitModule := module == nil
 	if implicitModule {
@@ -783,7 +789,7 @@ func (s *Server) handleConnReceiver(module *Module, crd *rsyncwire.CountingReade
 }
 
 // handleConnSender is equivalent to rsync/main.c:do_server_sender
-func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter, env *rsyncos.Env) (err error) {
+func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader, cwr *rsyncwire.CountingWriter, rawRd io.Reader, paths []string, opts *rsyncopts.Options, c *rsyncwire.Conn, sessionChecksumSeed int32, mpx *rsyncwire.MultiplexWriter, env *rsyncos.Env) (err error) {
 	// A daemon module keeps followed links inside it; a server over a
 	// remote shell has no module and follows them anywhere, as rsync does.
 	confined := module != nil
@@ -820,6 +826,15 @@ func (s *Server) handleConnSender(module *Module, crd *rsyncwire.CountingReader,
 		return err
 	}
 	st.Logger.Printf("exclusion list read (entries: %d)", len(exclusionList.Filters))
+
+	if err := opts.CheckSenderPaths(); err != nil {
+		return err
+	}
+	if opts.FilesFrom() != "" {
+		if err := s.filesFrom(st, module, rawRd, paths); err != nil {
+			return err
+		}
+	}
 
 	stats, err := st.Do(crd, cwr, module.Path, paths, exclusionList)
 	if err != nil {
