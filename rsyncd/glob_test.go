@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -66,13 +65,6 @@ func startStockDaemon(t *testing.T, dir string) string {
 func startStockDaemonModule(t *testing.T, dir string, readOnly bool) string {
 	t.Helper()
 	bin := rsynctest.TridgeOrGTFO(t, "compares with the stock daemon")
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	_, port, _ := net.SplitHostPort(addr)
-	l.Close()
 	// Not t.TempDir: under Cygwin (cwrsync) a connection's child process
 	// can outlive the killed daemon for a moment with d.log open, and
 	// Windows will not remove the folder until it exits.
@@ -82,7 +74,7 @@ func startStockDaemonModule(t *testing.T, dir string, readOnly bool) string {
 	}
 	t.Cleanup(func() { removeAllRetry(t, confDir) })
 	conf := filepath.Join(confDir, "rsyncd.conf")
-	cfg := fmt.Sprintf("use chroot = no\nport = %s\n", port)
+	cfg := "use chroot = no\n"
 	if os.Getuid() == 0 {
 		// A daemon started as root runs transfers as nobody, which cannot
 		// write to the test's folders.
@@ -92,19 +84,7 @@ func startStockDaemonModule(t *testing.T, dir string, readOnly bool) string {
 	if err := os.WriteFile(conf, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, "--daemon", "--no-detach", "--config="+conf, "--port="+port, "--log-file="+filepath.Join(filepath.Dir(conf), "d.log"))
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if c, err := net.Dial("tcp", addr); err == nil {
-			c.Close()
-			return addr
-		}
-	}
-	t.Fatal("stock rsync daemon did not come up")
-	return ""
+	return rsynctest.StockDaemon(t, bin, "--config="+conf, "--log-file="+filepath.Join(filepath.Dir(conf), "d.log"))
 }
 
 // removeAllRetry removes dir, giving processes that still hold files in
