@@ -1,0 +1,104 @@
+name: interop matrix
+
+# Interop tests against pinned rsync releases, one per protocol version,
+# plus rsync master and openrsync (see testdata/rsync-matrix). One job
+# builds them; then one job a protocol runs the suite against all of
+# them, in parallel on the Forgejo runners.
+
+on:
+  push:
+  pull_request:
+
+env:
+  BUILD_DEPS: >-
+    build-essential bmake libacl1-dev libpopt-dev libssl-dev libxxhash-dev
+    libzstd-dev liblz4-dev zlib1g-dev libidn2-dev
+
+jobs:
+  # Builds the rsync matrix, or restores it from this runner's cache, and
+  # hands the binaries to the test jobs as an artifact: runners need not
+  # share a cache, but they all reach the Forgejo server.
+  build:
+    runs-on: ubuntu-runner
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-go@v7
+      with:
+        go-version: 'stable'
+
+    - name: install build dependencies
+      run: |
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $BUILD_DEPS
+
+    - uses: actions/cache@v6
+      with:
+        path: ~/.cache/gokrazy-rsync-matrix
+        key: rsync-matrix-${{ runner.os }}-${{ hashFiles('testdata/rsync-matrix/versions.txt', 'testdata/rsync-matrix/build.sh') }}
+
+    - name: build rsync matrix
+      run: ./testdata/rsync-matrix/build.sh
+
+    # Upstream's token.c on its own, from the master build's tree, so the
+    # compressed token streams are checked against it in both directions.
+    - name: compare token streams with upstream token.c
+      run: |
+        make -C internal/rsynctoken/testdata/tokharness RSYNC_SRC=$HOME/.cache/gokrazy-rsync-matrix/src/rsync-master
+        go test -count=1 ./internal/rsynctoken
+
+    # A tarball, as artifacts do not keep the executable bit.
+    - name: pack the builds
+      run: |
+        cd ~/.cache/gokrazy-rsync-matrix
+        tar -czf "$GITHUB_WORKSPACE/rsync-builds.tgz" */bin
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: rsync-builds
+        path: rsync-builds.tgz
+        retention-days: 1
+
+  # The suite against every build, once at the protocol each speaks and
+  # again at each older one gokrazy/rsync speaks, so the older encodings
+  # stay covered as MaxProtocolVersion rises. Each pass is its own job.
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        protocol: [default, '27', '28', '29', '30', '31', '32']
+    name: interop (protocol ${{ matrix.protocol }})
+    runs-on: ubuntu-runner
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-go@v7
+      with:
+        go-version: 'stable'
+
+    # The builds link against these.
+    - name: install libraries
+      run: |
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $BUILD_DEPS
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: rsync-builds
+
+    - name: unpack the builds
+      run: |
+        mkdir -p ~/.cache/gokrazy-rsync-matrix
+        tar -xzf rsync-builds.tgz -C ~/.cache/gokrazy-rsync-matrix
+        rm rsync-builds.tgz
+
+    - name: run tests against each rsync
+      run: ./testdata/rsync-matrix/run-tests.sh ${{ matrix.protocol != 'default' && format('-p {0}', matrix.protocol) || '' }}
+
+    - name: upload test logs
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: rsync-matrix-test-logs-${{ matrix.protocol }}
+        path: ~/.cache/gokrazy-rsync-matrix/test-logs

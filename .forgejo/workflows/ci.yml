@@ -1,0 +1,60 @@
+name: CI
+
+# The Linux checks, on the Forgejo runners. Forgejo runs this folder's
+# workflows and ignores .github/workflows; GitHub, which gets each push
+# from Forgejo, runs .github/workflows: the Windows and macOS tests and
+# the Debian and Fedora rsync builds.
+#
+# Actions not mirrored on data.forgejo.org go by full URL.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  staticcheck:
+    runs-on: ubuntu-runner
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-go@v7
+      with:
+        go-version: 'stable'
+
+    # The tool itself, pinned, rather than dominikh/staticcheck-action,
+    # whose own steps would come from the mirror at other versions.
+    - name: staticcheck
+      run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
+
+  tests:
+    name: tests (linux)
+    runs-on: ubuntu-runner
+    steps:
+    - uses: actions/checkout@v7
+
+    - uses: actions/setup-go@v7
+      with:
+        go-version: 'stable'
+
+    # The runner image has no rsync; the suite compares with it.
+    - name: install rsync
+      run: |
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends rsync openssh-client attr acl
+
+    - name: Ensure all files were formatted as per gofmt
+      run: |
+        [ "$(gofmt -l $(find . -name '*.go') 2>&1)" = "" ]
+
+    - name: go vet
+      run: go vet ./...
+
+    - name: run tests
+      run: go test -v ./...
+
+    # As root: --fake-super as root, and trusted xattrs, also on symlinks
+    # and FIFOs. In a container without CAP_SYS_ADMIN the trusted ones
+    # skip themselves.
+    - name: xattrs and --fake-super as root
+      run: |
+        sudo env "PATH=$PATH" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" go test -v -run 'Xattr|ReadSet|FakeSuper|StatRecord' ./internal/rsyncxattr ./integration/flist
