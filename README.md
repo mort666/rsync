@@ -4,6 +4,8 @@
 [![tests](https://github.com/gokrazy/rsync/actions/workflows/main.yml/badge.svg)](https://github.com/gokrazy/rsync/actions/workflows/main.yml)
 [![Sourcegraph](https://sourcegraph.com/github.com/gokrazy/rsync/-/badge.svg)](https://sourcegraph.com/github.com/gokrazy/rsync??badge)
 
+**NOTE**: This is an experimental fork of the `gokrazy/rsync` project by RTLabs, which brings the rsync protocol support up to the current protocol version of the "tridge" rsync release (Currently Protocol Version 33). If you happen to use this version and discover any issues please report on this repo, and **please DO NOT report upstream** as it is likely if anything the issue relates to the experimental element of this fork.
+
 gokrazy/rsync is [an Rsync program and reusable library](https://en.wikipedia.org/wiki/Rsync) implemented in the [Go programming language](https://en.wikipedia.org/wiki/Go_(programming_language)), originally as part of the [gokrazy Go appliance platform project](https://gokrazy.org). gokrazy/rsync is (wire-)compatible with the original "[tridge](https://en.wikipedia.org/wiki/Andrew_Tridgell)" Rsync.
 
 Various use-cases are supported:

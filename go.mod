@@ -1,6 +1,6 @@
 module github.com/gokrazy/rsync
 
-go 1.26.0
+go 1.27
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -10,6 +10,7 @@ require (
 	github.com/google/renameio/v2 v2.0.2
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/klauspost/compress v1.20.5
+	github.com/landlock-lsm/go-landlock v0.0.0-20250303204525-1544bccde3a3
 	github.com/mmcloughlin/md4 v0.1.2
 	github.com/pierrec/lz4/v4 v4.1.33
 	github.com/zeebo/xxh3 v1.1.0
@@ -18,9 +19,7 @@ require (
 	golang.org/x/sys v0.49.0
 )
 
-require github.com/klauspost/cpuid/v2 v2.2.10 // indirect
-
 require (
-	github.com/landlock-lsm/go-landlock v0.0.0-20250303204525-1544bccde3a3
+	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.70 // indirect
 )
