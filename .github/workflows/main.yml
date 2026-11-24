@@ -1,78 +1,67 @@
 name: CI
 
+# What the Forgejo runners cannot do: the tests on macOS and Windows, and
+# against the rsync builds of Debian and Fedora, which need Docker. Forgejo
+# runs .forgejo/workflows (the Linux tests, staticcheck and the interop
+# matrix) and pushes to this repository, where these run.
+
 on:
   push:
   pull_request:
 
 jobs:
-  staticcheck:
+  # Skips the rest for a pull request whose branch is in this repository
+  # (its push run covers it), and on master when the merged files already
+  # passed this workflow on their branch (.github/scripts/passed-before.sh).
+  gate:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dominikh/staticcheck-action@v1.4.1
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 2
+    - id: check
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      run: .github/scripts/passed-before.sh main.yml
 
-  # Interop tests against pinned rsync releases, one per protocol version
-  # (29 to 33), plus rsync master and openrsync. See testdata/rsync-matrix.
-  interop-matrix:
+  # The suite against Debian's and Fedora's rsync, in their own images.
+  distros:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
+    name: tests (debian, fedora)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v7
 
-    - uses: actions/setup-go@v7
-      with:
-        go-version: 'stable'
-
-    - name: install build dependencies
+    - name: build the images
       run: |
-        sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-          build-essential bmake libacl1-dev libpopt-dev libssl-dev libxxhash-dev \
-          libzstd-dev liblz4-dev zlib1g-dev libidn2-dev
+        docker build --pull --no-cache --rm -t=rsync-debian -f testdata/ci-debian.Dockerfile .
+        docker build --pull --no-cache --rm -t=rsync-fedora -f testdata/ci-fedora.Dockerfile .
 
-    - uses: actions/cache@v6
-      with:
-        path: ~/.cache/gokrazy-rsync-matrix
-        key: rsync-matrix-${{ runner.os }}-${{ hashFiles('testdata/rsync-matrix/versions.txt', 'testdata/rsync-matrix/build.sh') }}
-
-    - name: build rsync matrix
-      run: ./testdata/rsync-matrix/build.sh
-
-    - name: run tests against each rsync
-      run: ./testdata/rsync-matrix/run-tests.sh
-
-    # Upstream's token.c on its own, from the master build's tree, so the
-    # compressed token streams are checked against it in both directions.
-    - name: compare token streams with upstream token.c
+    - name: run tests
       run: |
-        make -C internal/rsynctoken/testdata/tokharness RSYNC_SRC=$HOME/.cache/gokrazy-rsync-matrix/src/rsync-master
-        go test -count=1 ./internal/rsynctoken
-
-    # Every build again at each older protocol gokrazy/rsync speaks, so the
-    # older encodings stay covered as MaxProtocolVersion rises.
-    - name: run tests against each rsync at protocols 27 to 32
-      run: |
-        ./testdata/rsync-matrix/run-tests.sh -p 27
-        ./testdata/rsync-matrix/run-tests.sh -p 28
-        ./testdata/rsync-matrix/run-tests.sh -p 29
-        ./testdata/rsync-matrix/run-tests.sh -p 30
-        ./testdata/rsync-matrix/run-tests.sh -p 31
-        ./testdata/rsync-matrix/run-tests.sh -p 32
-
-    - name: upload test logs
-      if: always()
-      uses: actions/upload-artifact@v7
-      with:
-        name: rsync-matrix-test-logs
-        path: ~/.cache/gokrazy-rsync-matrix/test-logs
+        echo "::group::rsync from Debian"
+        docker run -v $PWD:/usr/src/rsync/ -w /usr/src/rsync rsync-debian go test ./...
+        echo "::endgroup::"
+        echo "::group::rsync from Fedora"
+        docker run -v $PWD:/usr/src/rsync/ -w /usr/src/rsync rsync-fedora go test ./...
+        echo "::endgroup::"
 
   tests:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     strategy:
       # Let each OS finish, so one failing does not hide the others.
       fail-fast: false
       matrix:
         os:
         - macos-latest
-        - ubuntu-latest
         - windows-latest
         # Windows runs once with each common rsync build: cwRsync from
         # Chocolatey (Cygwin based) and MSYS2's, which Git Bash users add.
@@ -96,20 +85,9 @@ jobs:
         # Latest stable version of Go, e.g. 1.20.2
         go-version: 'stable'
 
-    - name: Ensure all files were formatted as per gofmt
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        [ "$(gofmt -l $(find . -name '*.go') 2>&1)" = "" ]
-
     - name: go vet
       run: |
         go vet ./...
-
-    - name: install rsync
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        docker build --pull --no-cache --rm -t=rsync-debian -f testdata/ci-debian.Dockerfile .
-        docker build --pull --no-cache --rm -t=rsync-fedora -f testdata/ci-fedora.Dockerfile .
 
     - name: install rsync (cwRsync)
       if: matrix.rsync == 'cwrsync'
@@ -128,23 +106,6 @@ jobs:
       run: |
         cygpath -w /usr/bin >> "$GITHUB_PATH"
         rsync --version | head -1
-
-    - name: run tests (linux)
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        go test -v ./...
-        echo "::group::rsync from Debian"
-        docker run -v $PWD:/usr/src/rsync/ -w /usr/src/rsync rsync-debian go test ./...
-        echo "::endgroup::"
-        echo "::group::rsync from Fedora"
-        docker run -v $PWD:/usr/src/rsync/ -w /usr/src/rsync rsync-fedora go test ./...
-        echo "::endgroup::"
-        # As root on the runner itself, with every capability: trusted
-        # xattrs, also on symlinks and FIFOs, which a container's root
-        # cannot set, and --fake-super as root.
-        echo "::group::xattrs as root"
-        sudo env "PATH=$PATH" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" go test -v -run 'Xattr|ReadSet|FakeSuper|StatRecord' ./internal/rsyncxattr ./integration/flist
-        echo "::endgroup::"
 
     - name: run tests (macos)
       if: matrix.os == 'macos-latest'

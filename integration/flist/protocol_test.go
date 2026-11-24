@@ -107,15 +107,8 @@ func startStockDaemonModule(t *testing.T, dir string, readOnly bool) string {
 func startStockDaemonConf(t *testing.T, dir, conf string) (addr, logFile string) {
 	t.Helper()
 	bin := rsynctest.TridgeOrGTFO(t, "compares with the stock daemon")
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr = l.Addr().String()
-	_, port, _ := net.SplitHostPort(addr)
-	l.Close()
 	confFile := filepath.Join(t.TempDir(), "rsyncd.conf")
-	cfg := fmt.Sprintf("use chroot = no\nport = %s\n", port)
+	cfg := "use chroot = no\n"
 	if os.Getuid() == 0 {
 		// A daemon started as root runs transfers as nobody, which cannot
 		// write to the test's folders (CI runs the suite as root in
@@ -130,19 +123,7 @@ func startStockDaemonConf(t *testing.T, dir, conf string) (addr, logFile string)
 		t.Fatal(err)
 	}
 	logFile = filepath.Join(filepath.Dir(confFile), "d.log")
-	cmd := exec.Command(bin, "--daemon", "--no-detach", "--config="+confFile, "--port="+port, "--log-file="+logFile)
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
-	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		if c, err := net.Dial("tcp", addr); err == nil {
-			c.Close()
-			return addr, logFile
-		}
-	}
-	t.Fatal("stock rsync daemon did not come up")
-	return "", ""
+	return rsynctest.StockDaemon(t, bin, "--config="+confFile, "--log-file="+logFile), logFile
 }
 
 // gokrazyPull runs a gokrazy client with args against mod/<path> on the
