@@ -256,7 +256,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		return nil // SkipDir on a file would skip the rest of its folder
 	}
 
-	if s.excl.matches(name) {
+	if s.excl.matches(name, info.IsDir()) {
 		if d.IsDir() {
 			return filepath.SkipDir // skip the excluded folder
 		}
@@ -600,7 +600,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 	// slash, or ".", goes with its own entries, one level deep; it is the
 	// only entry sent as ".". Any other folder goes as an entry only.
 	// (rsync flist.c send_file_list: SLASH_ENDING_NAME, DOTDIR_NAME.)
-	if d.IsDir() && !opts.Recurse() && name != "." {
+	if d.IsDir() && !opts.Recurse() && name != "." && !s.only.leadsTo(name) {
 		return filepath.SkipDir
 	}
 	if mountDir {
@@ -636,7 +636,7 @@ func (st *Transfer) SendFileList(localDir string, paths []string, excl *filterRu
 		st.Logger.Printf("sendFileList()")
 	}
 	ioErrors := int32(0)
-	only := newOnlySet(st.Only)
+	only := newOnlySet(st.Only, st.OnlyRecurse)
 
 	ioError := func(err error) {
 		if os.IsNotExist(err) {

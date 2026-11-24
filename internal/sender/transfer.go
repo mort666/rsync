@@ -62,6 +62,9 @@ type Transfer struct {
 	// the file list, and the folders above them, as rsync's --files-from.
 	// A listed path that is not there sets io_error.
 	Only []string
+	// OnlyRecurse sends a listed folder with all it holds, as
+	// --files-from does with -r. Without it a listed folder goes alone.
+	OnlyRecurse bool
 
 	// OnSend, when set, is called with each file's name, as in the file
 	// list, as the sender begins to send it: once per file, so not again

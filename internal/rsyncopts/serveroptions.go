@@ -105,8 +105,9 @@ func (o *Options) ServerOptions() []string {
 	if o.IgnoreTimes() {
 		argstr += "I"
 	}
-	// if (relative_paths)
-	// 	argstr[x++] = 'R';
+	if o.relative_paths == 1 {
+		argstr += "R"
+	}
 	// One x per -x, up to two.
 	for i := 0; i < o.one_file_system && i < 2; i++ {
 		argstr += "x"
@@ -349,17 +350,25 @@ func (o *Options) ServerOptions() []string {
 	// 	args[ac++] = compare_dest;
 	// }
 
-	// if (files_from && (!am_sender || remote_filesfrom_file)) {
-	// 	if (remote_filesfrom_file) {
-	// 		args[ac++] = "--files-from";
-	// 		args[ac++] = remote_filesfrom_file;
-	// 		if (eol_nulls)
-	// 			args[ac++] = "--from0";
-	// 	} else {
-	// 		args[ac++] = "--files-from=-";
-	// 		args[ac++] = "--from0";
-	// 	}
-	// }
+	// A receiving client sends its local --files-from names over the
+	// connection, NUL-ended; a remote file goes by name for the server
+	// to read.
+	if o.files_from != "" {
+		if path, remote := o.FilesFromRemote(); remote {
+			sargv = append(sargv, "--files-from", path)
+			if o.eol_nulls != 0 {
+				sargv = append(sargv, "--from0")
+			}
+		} else if !o.Sender() {
+			sargv = append(sargv, "--files-from=-", "--from0")
+		}
+		if o.relative_paths == 0 {
+			sargv = append(sargv, "--no-relative")
+		}
+	}
+	if o.relative_paths == 1 && o.implied_dirs == 0 && !o.Sender() {
+		sargv = append(sargv, "--no-implied-dirs")
+	}
 
 	// -M options go last, as they are (options.c:server_options).
 	sargv = append(sargv, o.remote_options...)

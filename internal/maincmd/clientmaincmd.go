@@ -419,6 +419,10 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	}
 	c.Reader = crd
 
+	// Below protocol 31, --files-from names go out unmultiplexed
+	// (io.c:start_filesfrom_forwarding), so keep the plain writer.
+	rawWriter := io.Writer(cwr)
+
 	// From protocol 30 the client multiplexes its output too, from right
 	// after the seed. Below 30 only a receiving client does, and only with
 	// --remove-source-files, for MSG_SUCCESS (main.c:client_run,
@@ -453,6 +457,27 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		}
 		if opts.Verbose() {
 			osenv.Logf("sender(paths=%q)", paths)
+		}
+		if err := opts.CheckSenderPaths(); err != nil {
+			return nil, nil, err
+		}
+		if opts.FilesFrom() != "" {
+			if _, remote := opts.FilesFromRemote(); remote {
+				return nil, nil, fmt.Errorf("a --files-from on the remote side is not supported yet when sending")
+			}
+			if err := opts.LoadFilesFrom(); err != nil {
+				return nil, nil, err
+			}
+			if len(paths) != 1 {
+				return nil, nil, fmt.Errorf("--files-from takes one source folder, got %q", paths)
+			}
+			// The names are relative to the source folder (flist.c
+			// send_file_list changes into it), as -R keeps them.
+			if !strings.HasSuffix(paths[0], "/") {
+				paths[0] += "/"
+			}
+			st.Only = sender.FilesFromNames(opts.FilesFromNames(), false)
+			st.OnlyRecurse = opts.Recurse()
 		}
 
 		// Turn relative paths like ./gcexportdata or bin/gcexportdata
@@ -613,6 +638,23 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 		osenv.Logf("exclusion list sent")
 	}
 
+	// A local --files-from goes to the sender while it builds the file
+	// list (main.c:client_run, start_filesfrom_forwarding).
+	var filesFromSent chan error
+	if opts.FilesFrom() != "" {
+		if _, remote := opts.FilesFromRemote(); !remote {
+			if err := opts.LoadFilesFrom(); err != nil {
+				return nil, nil, err
+			}
+			var w io.Writer = c.Writer
+			if c.Session.Protocol < 31 {
+				w = rawWriter
+			}
+			filesFromSent = make(chan error, 1)
+			go func() { filesFromSent <- writeFilesFrom(w, opts.FilesFromNames()) }()
+		}
+	}
+
 	// receive file list
 	if opts.DebugGTE(rsyncopts.DEBUG_FLIST, 1) {
 		osenv.Logf("receiving file list")
@@ -620,6 +662,11 @@ func ClientRun(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options,
 	fileList, err := rt.ReceiveFileList()
 	if err != nil {
 		return nil, nil, err
+	}
+	if filesFromSent != nil {
+		if err := <-filesFromSent; err != nil {
+			return nil, nil, fmt.Errorf("sending --files-from names: %v", err)
+		}
 	}
 	if opts.DebugGTE(rsyncopts.DEBUG_FLIST, 2) {
 		osenv.Logf("received %d names", len(fileList))
@@ -661,6 +708,16 @@ func clientMain(ctx context.Context, osenv *rsyncos.Env, opts *rsyncopts.Options
 		}
 		defer f.Close()
 		osenv.LogFile = f
+	}
+	if opts.FilesFrom() != "" {
+		// options.c: a source folder and a destination, no more.
+		if len(sources) != 1 {
+			return nil, fmt.Errorf("--files-from takes one source folder and a destination")
+		}
+		// Read before the sandbox, which would not let it be.
+		if err := opts.LoadFilesFrom(); err != nil {
+			return nil, err
+		}
 	}
 	stats, err := rsyncMain(ctx, osenv, opts, sources, dest)
 	if err == nil && stats != nil && osenv.LogFile != nil {

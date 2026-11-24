@@ -158,7 +158,7 @@ type Transfer struct {
 	// Excluded, if non-nil, reports whether a destination path (relative to
 	// DestRoot, slash-separated) is protected from deletion by the
 	// client-supplied filter list. Consulted only when DeleteMode is on.
-	Excluded func(name string) bool
+	Excluded func(name string, dir bool) bool
 
 	// OpenBasisDir, if non-nil, opens an alternate folder of --link-dest
 	// and the like, as the daemon does to keep them inside its module.

@@ -33,7 +33,7 @@ func TestExcludedSurgicalFileDelete(t *testing.T) {
 		{"subdir/foo", true},
 	}
 	for _, c := range cases {
-		if got := l.Excluded(c.name); got != c.want {
+		if got := l.Excluded(c.name, false); got != c.want {
 			t.Errorf("Excluded(%q) = %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -51,7 +51,7 @@ func TestExcludedSurgicalDirDelete(t *testing.T) {
 		{"bar/inner", true},
 	}
 	for _, c := range cases {
-		if got := l.Excluded(c.name); got != c.want {
+		if got := l.Excluded(c.name, false); got != c.want {
 			t.Errorf("Excluded(%q) = %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -85,7 +85,7 @@ func TestRecvFilterListAcceptsWildcards(t *testing.T) {
 		{"bar/inner", true},
 	}
 	for _, c := range cases {
-		if got := l.Excluded(c.name); got != c.want {
+		if got := l.Excluded(c.name, false); got != c.want {
 			t.Errorf("Excluded(%q) = %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -93,7 +93,7 @@ func TestRecvFilterListAcceptsWildcards(t *testing.T) {
 
 func TestExcludedEmptyList(t *testing.T) {
 	l := buildList(t)
-	if l.Excluded("anything") {
+	if l.Excluded("anything", false) {
 		t.Errorf("Excluded on empty rule list should be false")
 	}
 }
@@ -102,13 +102,13 @@ func TestMatchesAnchored(t *testing.T) {
 	fr, _ := parseFilter("- /foo")
 	var l filterRuleList
 	l.addRule(fr)
-	if !fr.matches("foo") {
+	if !fr.matches("foo", false) {
 		t.Errorf("/foo should match top-level foo")
 	}
-	if fr.matches("sub/foo") {
+	if fr.matches("sub/foo", false) {
 		t.Errorf("/foo should NOT match nested sub/foo (anchored)")
 	}
-	if fr.matches("foo/sub") {
+	if fr.matches("foo/sub", false) {
 		t.Errorf("/foo should NOT match foo/sub (anchored, no trailing slash)")
 	}
 }
@@ -117,13 +117,13 @@ func TestMatchesUnanchored(t *testing.T) {
 	fr, _ := parseFilter("- foo")
 	var l filterRuleList
 	l.addRule(fr)
-	if !fr.matches("foo") {
+	if !fr.matches("foo", false) {
 		t.Errorf("foo should match foo")
 	}
-	if !fr.matches("a/b/foo") {
+	if !fr.matches("a/b/foo", false) {
 		t.Errorf("unanchored foo should match at any depth (basename)")
 	}
-	if fr.matches("foobar") {
+	if fr.matches("foobar", false) {
 		t.Errorf("unanchored foo should not match foobar")
 	}
 }
@@ -132,10 +132,10 @@ func TestMatchesWildcardStar(t *testing.T) {
 	fr, _ := parseFilter("- *")
 	var l filterRuleList
 	l.addRule(fr)
-	if !fr.matches("anything") {
+	if !fr.matches("anything", false) {
 		t.Errorf("* should match anything")
 	}
-	if !fr.matches("a/b/c") {
+	if !fr.matches("a/b/c", false) {
 		t.Errorf("* should match basename of nested path")
 	}
 }
@@ -172,8 +172,42 @@ func TestParseFilterProto(t *testing.T) {
 		}
 		var l filterRuleList
 		l.addRule(fr)
-		if got := l.Excluded(tt.excludes); got != tt.protected {
+		if got := l.Excluded(tt.excludes, false); got != tt.protected {
 			t.Errorf("%q at %d: Excluded(%q) = %v, want %v", tt.line, tt.proto, tt.excludes, got, tt.protected)
 		}
+	}
+}
+
+// TestDirectoryRuleMatchesFolders checks that a rule ending in "/" is for
+// folders alone (exclude.c:rule_matches): "+ */" must not include files,
+// or "--include=*/ --exclude=*" would send everything.
+func TestDirectoryRuleMatchesFolders(t *testing.T) {
+	l := buildList(t, "+ b.txt", "+ */", "- *")
+	for _, c := range []struct {
+		name string
+		dir  bool
+		want bool
+	}{
+		{"b.txt", false, false},
+		{"d", true, false},
+		{"d/b.txt", false, false},
+		{"y", false, true},
+		{"d/x", false, true},
+	} {
+		if got := l.matches(c.name, c.dir); got != c.want {
+			t.Errorf("matches(%q, dir=%v) = %v, want %v", c.name, c.dir, got, c.want)
+		}
+	}
+	fr, err := parseFilterProto(30, "-! */")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var neg filterRuleList
+	neg.addRule(fr)
+	if !neg.matches("file", false) {
+		t.Errorf(`"-! */" should exclude a file`)
+	}
+	if neg.matches("dir", true) {
+		t.Errorf(`"-! */" should not exclude a folder`)
 	}
 }

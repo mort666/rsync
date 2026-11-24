@@ -350,6 +350,8 @@ type Options struct {
 	batch_name               string
 	files_from               string
 	eol_nulls                int
+	filesFromNames           []string // a local --files-from, once loaded
+	filesFromLoaded          bool
 	old_style_args           int // intentionally set to 0; unsupported
 	protect_args             int // intentionally set to 0; currently unsupported
 	trust_sender             int
@@ -1133,13 +1135,13 @@ func (o *Options) gokrazyTable() []poptOption {
 		{"hard-links", "H", POPT_ARG_NONE, nil, 'H'},
 		{"no-hard-links", "", POPT_ARG_VAL, &o.preserve_hard_links, 0},
 		{"no-H", "", POPT_ARG_VAL, &o.preserve_hard_links, 0},
-		//{"relative", "R", POPT_ARG_VAL, &o.relative_paths, 1},
-		//{"no-relative", "", POPT_ARG_VAL, &o.relative_paths, 0},
-		//{"no-R", "", POPT_ARG_VAL, &o.relative_paths, 0},
-		//{"implied-dirs", "", POPT_ARG_VAL, &o.implied_dirs, 1},
-		//{"no-implied-dirs", "", POPT_ARG_VAL, &o.implied_dirs, 0},
-		//{"i-d", "", POPT_ARG_VAL, &o.implied_dirs, 1},
-		//{"no-i-d", "", POPT_ARG_VAL, &o.implied_dirs, 0},
+		{"relative", "R", POPT_ARG_VAL, &o.relative_paths, 1},
+		{"no-relative", "", POPT_ARG_VAL, &o.relative_paths, 0},
+		{"no-R", "", POPT_ARG_VAL, &o.relative_paths, 0},
+		{"implied-dirs", "", POPT_ARG_VAL, &o.implied_dirs, 1},
+		{"no-implied-dirs", "", POPT_ARG_VAL, &o.implied_dirs, 0},
+		{"i-d", "", POPT_ARG_VAL, &o.implied_dirs, 1},
+		{"no-i-d", "", POPT_ARG_VAL, &o.implied_dirs, 0},
 		//{"chmod", "", POPT_ARG_STRING, nil, OPT_CHMOD},
 		{"ignore-times", "I", POPT_ARG_NONE, &o.ignore_times, 0},
 		{"size-only", "", POPT_ARG_NONE, &o.size_only, 0},
@@ -1182,8 +1184,8 @@ func (o *Options) gokrazyTable() []poptOption {
 		{"filter", "f", POPT_ARG_STRING, nil, OPT_FILTER},
 		{"exclude", "", POPT_ARG_STRING, nil, OPT_EXCLUDE},
 		{"include", "", POPT_ARG_STRING, nil, OPT_INCLUDE},
-		//{"exclude-from", "", POPT_ARG_STRING, nil, OPT_EXCLUDE_FROM},
-		//{"include-from", "", POPT_ARG_STRING, nil, OPT_INCLUDE_FROM},
+		{"exclude-from", "", POPT_ARG_STRING, nil, OPT_EXCLUDE_FROM},
+		{"include-from", "", POPT_ARG_STRING, nil, OPT_INCLUDE_FROM},
 		//{"cvs-exclude", "C", POPT_ARG_NONE, &o.cvs_exclude, 0},
 		{"whole-file", "W", POPT_ARG_VAL, &o.whole_file, 1},
 		{"no-whole-file", "", POPT_ARG_VAL, &o.whole_file, 0},
@@ -1245,9 +1247,9 @@ func (o *Options) gokrazyTable() []poptOption {
 		//{"read-batch", "", POPT_ARG_STRING, &o.batch_name, OPT_READ_BATCH},
 		//{"write-batch", "", POPT_ARG_STRING, &o.batch_name, OPT_WRITE_BATCH},
 		//{"only-write-batch", "", POPT_ARG_STRING, &o.batch_name, OPT_ONLY_WRITE_BATCH},
-		//{"files-from", "", POPT_ARG_STRING, &o.files_from, 0},
-		//{"from0", "0", POPT_ARG_VAL, &o.eol_nulls, 1},
-		//{"no-from0", "", POPT_ARG_VAL, &o.eol_nulls, 0},
+		{"files-from", "", POPT_ARG_STRING, &o.files_from, 0},
+		{"from0", "0", POPT_ARG_VAL, &o.eol_nulls, 1},
+		{"no-from0", "", POPT_ARG_VAL, &o.eol_nulls, 0},
 		//{"old-args", "", POPT_ARG_NONE, nil, OPT_OLD_ARGS},
 		//{"no-old-args", "", POPT_ARG_VAL, &o.old_style_args, 0},
 		//{"secluded-args", "s", POPT_ARG_VAL, &o.protect_args, 1},
@@ -1667,7 +1669,20 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 
 		case OPT_INCLUDE_FROM,
 			OPT_EXCLUDE_FROM:
-			return errNotYetImplemented
+			if opts.am_server != 0 {
+				// A client sends its rules in the filter list; a server
+				// has no business opening files a client names.
+				return fmt.Errorf("--exclude-from and --include-from are not accepted by a server")
+			}
+			prefix := "- "
+			if opt == OPT_INCLUDE_FROM {
+				prefix = "+ "
+			}
+			rules, err := opts.readFilterFile(pc.poptGetOptArg(), prefix)
+			if err != nil {
+				return err
+			}
+			opts.filterRules = append(opts.filterRules, rules...)
 
 		case 'a':
 			if opts.recurse == 0 {
@@ -1878,6 +1893,17 @@ func (pc *Context) ParseArguments(osenv *rsyncos.Env, args []string) error {
 
 	if err := opts.setOutputVerbosity(DEFAULT_PRIORITY); err != nil {
 		return err
+	}
+
+	// options.c: with --files-from, -a does not recurse (an explicit -r
+	// does), and folders are sent as entries.
+	if opts.files_from != "" {
+		if opts.recurse == 1 {
+			opts.recurse = 0
+		}
+		if opts.xfer_dirs < 0 {
+			opts.xfer_dirs = 1
+		}
 	}
 
 	if opts.recurse != 0 {
