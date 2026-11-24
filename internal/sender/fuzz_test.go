@@ -83,7 +83,8 @@ func FuzzRecvFilterList(f *testing.F) {
 			return
 		}
 		for _, name := range []string{".", "foo", "dir/foo.c", ""} {
-			l.matches(name)
+			l.matches(name, false)
+			l.matches(name, true)
 		}
 	})
 }

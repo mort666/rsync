@@ -256,7 +256,7 @@ func (s *scopedWalker) walkFn(path string, d fs.DirEntry, err error) error {
 		return nil // SkipDir on a file would skip the rest of its folder
 	}
 
-	if s.excl.matches(name) {
+	if s.excl.matches(name, info.IsDir()) {
 		if d.IsDir() {
 			return filepath.SkipDir // skip the excluded folder
 		}

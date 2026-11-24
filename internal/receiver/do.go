@@ -45,7 +45,7 @@ func (rt *Transfer) deleteFiles(fileList []*File) error {
 
 	// deleteItem removes path, which the sender does not have.
 	deleteItem := func(path string, info fs.DirEntry) {
-		if rt.Excluded != nil && rt.Excluded(path) {
+		if rt.Excluded != nil && rt.Excluded(path, info.IsDir()) {
 			if rt.Opts.Verbose {
 				rt.Logger.Printf("  protecting %s (filter rule)", path)
 			}

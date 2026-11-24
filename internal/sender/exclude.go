@@ -30,12 +30,12 @@ func (l *filterRuleList) addRule(fr *filterRule) {
 
 // exclude.c:check_filter: the first matching rule decides, and an
 // include rule means the name goes.
-func (l *filterRuleList) matches(name string) bool {
+func (l *filterRuleList) matches(name string, dir bool) bool {
 	for _, fr := range l.Filters {
 		if fr.flag&filtruleReceiverOnly != 0 {
 			continue // a rule for the receiver side (e.g. protect)
 		}
-		if fr.matches(name) {
+		if fr.matches(name, dir) {
 			return fr.flag&filtruleInclude == 0
 		}
 	}
@@ -47,12 +47,12 @@ func (l *filterRuleList) matches(name string) bool {
 // walking the destination tree under --delete: paths matched by an exclude
 // rule must be preserved. An include rule that matches first means the path
 // is eligible for deletion per the normal source-fileList check.
-func (l *filterRuleList) Excluded(name string) bool {
+func (l *filterRuleList) Excluded(name string, dir bool) bool {
 	for _, fr := range l.Filters {
 		if fr.flag&filtruleSenderOnly != 0 {
 			continue // a rule for the sender side (e.g. hide)
 		}
-		if !fr.matches(name) {
+		if !fr.matches(name, dir) {
 			continue
 		}
 		return fr.flag&filtruleInclude == 0
@@ -108,8 +108,12 @@ type filterRule struct {
 	pattern string
 }
 
-// exclude.c:rule_matches
-func (fr *filterRule) matches(name string) bool {
+// exclude.c:rule_matches. A rule ending in "/" is for folders: it never
+// matches anything else (and a negated one always does).
+func (fr *filterRule) matches(name string, dir bool) bool {
+	if fr.flag&filtruleDirectory != 0 && !dir {
+		return fr.flag&filtruleNegate != 0
+	}
 	pat := fr.pattern
 	anchored := strings.HasPrefix(pat, "/")
 	if anchored {
@@ -193,7 +197,7 @@ func parseFilter(line string) (*filterRule, error) {
 // it receives: every rule but sender-side ones, or with --delete-excluded
 // only receiver-side ones (exclude.c:send_rules, which keeps those
 // local).
-func ReceiverRules(rules []string, deleteExcluded bool) func(name string) bool {
+func ReceiverRules(rules []string, deleteExcluded bool) func(name string, dir bool) bool {
 	var l filterRuleList
 	for _, r := range rules {
 		fr, err := parseFilterProto(30, r)
